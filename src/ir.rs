@@ -29,6 +29,7 @@ pub enum IrCp {
     Pop(IrOperand),
     Mov(IrOperand, IrOperand),
     And(IrOperand, IrOperand),
+    Jmp(IrLabel),
     Ret,
 }
 
@@ -37,6 +38,7 @@ pub enum IrLabel {
     ExportedFunc(u32, String),
     AnonymousFunc(u32),
     ImportedFunc(u32),
+    BranchTarget(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +71,10 @@ impl Ir {
 
     pub fn and(&mut self, dest: IrOperand, src: IrOperand) {
         self.0.push(IrCp::And(dest, src));
+    }
+
+    pub fn jmp(&mut self, target: IrLabel) {
+        self.0.push(IrCp::Jmp(target));
     }
 
     pub fn ret(&mut self) {

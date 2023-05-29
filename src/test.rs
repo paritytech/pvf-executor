@@ -15,12 +15,50 @@ fn test<P: WasmParams, R: WasmResultType>(code: Vec<u8>, params: P) -> R {
 
 #[test]
 fn i32_const() {
-	assert_eq!(test::<(), i32>(wat(r#"(module (func (export "test") (result i32) i32.const 42))"#), ()), 42);
-	assert_eq!(test::<(), i32>(wat(r#"(module (func (export "test") (result i32) i32.const -42))"#), ()), -42);
-	assert_eq!(test::<(), u32>(wat(r#"(module (func (export "test") (result i32) i32.const -42))"#), ()), 4294967254);
+	assert_eq!(test::<_, i32>(wat(r#"(module (func (export "test") (result i32) i32.const 42))"#), ()), 42);
+	assert_eq!(test::<_, i32>(wat(r#"(module (func (export "test") (result i32) i32.const -42))"#), ()), -42);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) i32.const -42))"#), ()), 4294967254);
 }
 
 #[test]
 fn i32_bitwise() {
-	assert_eq!(test::<(), u32>(wat(r#"(module (func (export "test") (result i32) (i32.and (i32.const 298) (i32.const 63))))"#), ()), 42);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.and (i32.const 298) (i32.const 63))))"#), ()), 42);
+}
+
+#[test]
+fn block() {
+	assert_eq!(
+		test::<_, i32>(wat(
+			r#"(module
+				(func (export "test") (result i32)
+					(block (result i32)
+						(block (result i32)
+							i32.const 42
+						)
+					)
+				)
+			)"#),
+			()
+		),
+		42
+	);
+	assert_eq!(
+		test::<_, i32>(wat(
+			r#"(module
+				(func (export "test") (result i32)
+					(block (result i32)
+						(block (result i32)
+							i32.const 40
+							i32.const 41
+							i32.const 42
+							br 1
+						)
+					)
+				)
+			)"#),
+			()
+		),
+		42
+	);
+	// TODO: `loop` test (after `br_if` is implemented)
 }

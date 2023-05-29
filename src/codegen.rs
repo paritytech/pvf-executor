@@ -23,8 +23,16 @@ impl CodeEmitter {
 		imm.to_le_bytes().into_iter().for_each(|b| self.code.push(b))
 	}
 
+	pub(crate) fn patch32_le(&mut self, pos: usize, imm: i32) {
+		self.code[pos..pos+4].copy_from_slice(&imm.to_le_bytes()[..])
+	}
+
 	pub(crate) fn label(&mut self, label: IrLabel) {
 		self.labels.insert(label, self.code.len());
+	}
+
+	pub(crate) fn pc(&self) -> usize {
+		self.code.len()
 	}
 }
 

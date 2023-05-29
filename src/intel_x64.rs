@@ -1,4 +1,4 @@
-use crate::{CodeGenerator, codegen::CodeEmitter, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*}};
+use crate::{CodeGenerator, codegen::CodeEmitter, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*, IrLabel}};
 
 pub struct IntelX64Compiler;
 
@@ -29,8 +29,12 @@ fn native_reg(r: &IrReg) -> u8 {
 	}
 }
 
+struct JmpTarget(usize, IrLabel);
+
 impl CodeGenerator for IntelX64Compiler {
 	fn compile_func(&self, code: &mut CodeEmitter, body: Ir) {
+		let mut jmp_targets = Vec::new();
+
 		for insn in body.code() {
 			match insn {
 				Label(label) => code.label(label.clone()),
@@ -94,9 +98,25 @@ impl CodeGenerator for IntelX64Compiler {
 						},
 						_ => todo!()
 					}
+				},
+				Jmp(label) => {
+					// jmp near rel32 (no address just yet)
+					code.emit(0xe9);
+					jmp_targets.push(JmpTarget(code.pc(), label.clone()));
+					code.emit_imm32_le(0);
 				}
 				Ret => code.emit(0xc3), // ret near
 				_ => todo!(),
+			}
+		}
+
+		for t in jmp_targets {
+			if let Some(label_pc) = code.labels.get(&t.1) {
+				let insn_pc = t.0 + 4;
+				let offset: isize = *label_pc as isize - insn_pc as isize;
+				code.patch32_le(t.0, offset as i32);
+			} else {
+				panic!("Unresolved label: {:?}", t.1)
 			}
 		}
 	}

@@ -7,8 +7,8 @@ fn wat(code: &str) -> Vec<u8> {
 fn test<P: WasmParams, R: WasmResultType>(code: Vec<u8>, params: P) -> R {
     let raw = RawPvf::from_bytes(&code);
     let ir = raw.translate().unwrap();
-    let codegen = IntelX64Compiler;
-    let pvf = ir.compile(&codegen);
+    let mut codegen = IntelX64Compiler::new();
+    let pvf = ir.compile(&mut codegen);
     let instance = PvfInstance::instantiate(&pvf);
     unsafe { instance.call::<_, _, R>("test", params) }.unwrap()
 }
@@ -28,8 +28,8 @@ fn i32_bitwise() {
 #[test]
 fn block() {
 	assert_eq!(
-		test::<_, i32>(wat(
-			r#"(module
+		test::<_, i32>(wat(r#"
+			(module
 				(func (export "test") (result i32)
 					(block (result i32)
 						(block (result i32)
@@ -43,8 +43,8 @@ fn block() {
 		42
 	);
 	assert_eq!(
-		test::<_, i32>(wat(
-			r#"(module
+		test::<_, i32>(wat(r#"
+			(module
 				(func (export "test") (result i32)
 					(block (result i32)
 						(block (result i32)
@@ -61,4 +61,76 @@ fn block() {
 		42
 	);
 	// TODO: `loop` test (after `br_if` is implemented)
+}
+
+#[test]
+fn call() {
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func $i42 (result i32) i32.const 42)
+				(func (export "test") (result i32) call $i42)
+			)"#),
+			()
+		),
+		42
+	);
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func $add2 (param i32) (result i32) (i32.add (local.get 0) (i32.const 2)))
+				(func (export "test") (result i32) (i32.const 40) (call $add2))
+			)"#),
+			()
+		),
+		42
+	);
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func $param6 (param i32 i32 i32 i32 i32 i32) (result i32) 
+					(i32.add (i32.sub (i32.add (i32.sub (i32.add (local.get 0) (local.get 1)) (local.get 2)) (local.get 3)) (local.get 4)) (local.get 5))
+				)
+				(func (export "test") (result i32)
+					(i32.add (call $param6 (i32.const 1) (i32.const 10) (i32.const 15) (i32.const 22) (i32.const 13) (i32.const 32)) (i32.const 5))
+				)
+			)"#),
+			()
+		),
+		42
+	);
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func $param9 (param i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32) 
+					(i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (local.get 0) (local.get 1)) (local.get 2)) (local.get 3)) (local.get 4)) (local.get 5)) (local.get 6)) (local.get 7)) (local.get 8))
+				)
+				(func (export "test") (result i32)
+					(i32.add (call $param9 (i32.const 1) (i32.const 10) (i32.const 15) (i32.const 22) (i32.const 13) (i32.const 32) (i32.const 54) (i32.const 100) (i32.const 48)) (i32.const 7))
+				)
+			)"#),
+			()
+		),
+		42
+	);
+	// FIXME: This requires long offset fixes
+	// assert_eq!(
+	// 	test::<_, i32>(wat(r#"
+	// 		(module
+	// 			(func $param20 (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32) 
+	// 				(i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (local.get 0) (local.get 1))
+	// 				(local.get 2)) (local.get 3)) (local.get 4)) (local.get 5)) (local.get 6)) (local.get 7)) (local.get 8)) (local.get 9))	(local.get 10)) (local.get 11)) (local.get 12)) (local.get 13)) (local.get 14)) (local.get 15)) (local.get 16))
+	// 				(local.get 17)) (local.get 18)) (local.get 19))
+	// 			)
+	// 			(func (export "test") (result i32)
+	// 				(i32.add (call $param20 (i32.const 1) (i32.const 10) (i32.const 15) (i32.const 22) (i32.const 13) (i32.const 32) (i32.const 54) (i32.const 100) (i32.const 48)
+	// 				(i32.const 9) (i32.const 54) (i32.const 88) (i32.const 65) (i32.const 115) (i32.const 87) (i32.const 2) (i32.const 91) (i32.const 14) (i32.const 63) (i32.const 138) (i32.const 9) 
+	// 				) 
+	// 				(i32.const 10))
+	// 			)
+	// 		)"#),
+	// 		()
+	// 	),
+	// 	42
+	// );
 }

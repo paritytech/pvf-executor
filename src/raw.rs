@@ -1,5 +1,5 @@
 use crate::{PvfError, IrPvf};
-use crate::ir::{Ir, IrLabel, IrOperand::*, IrReg::*};
+use crate::ir::{Ir, IrLabel, IrOperand::*, IrReg::*, IrSignature};
 use std::collections::HashMap;
 use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType};
 
@@ -40,11 +40,15 @@ impl RawPvf {
 	    let mut func_export: HashMap<u32, &str> = HashMap::new();
 	    // let mut irs = Vec::new();
 	    let mut ir_pvf = IrPvf::new();
+	    let mut functypes = Vec::new();
 
 	    for payload in Parser::new(0).parse_all(&self.wasm_code) {
 	        match payload? {
 	            Payload::TypeSection(reader) => {
 	                types = reader.into_iter().flatten().collect::<Vec<_>>();
+	            },
+	            Payload::FunctionSection(reader) => {
+	            	functypes = reader.into_iter().flatten().collect::<Vec<_>>();
 	            },
 	            Payload::ImportSection(reader) => {
 	                imports = reader.into_iter().flatten().collect::<Vec<_>>();
@@ -61,10 +65,14 @@ impl RawPvf {
 	                }
 	            },
 	            Payload::CodeSectionEntry(fbody) => {
+	            	let locals_reader = fbody.get_locals_reader()?;
+	            	let n_locals = locals_reader.into_iter().flatten().fold(0, |a, (n, _)| a + n);
+
 	                let mut reader = fbody.get_operators_reader()?;
 	                let mut ir = Ir::new();
 	                let mut cstack = Vec::new();
-	                let Type::Func(ftype) = &types[findex as usize];
+	                let typeidx = functypes[findex as usize];
+	                let Type::Func(ftype) = &types[typeidx as usize];
 
 	                cstack.push(ControlFrame { cftype: ControlFrameType::Func, block_index: 0, has_retval: ftype.results().len() > 0 });
 
@@ -79,6 +87,7 @@ impl RawPvf {
 	                ir.push(Reg(Bfp));
 	                ir.mov(Reg(Ffp), Reg(Stp));
 	                ir.mov(Reg(Bfp), Reg(Stp));
+	                ir.init_locals(n_locals);
 
 	                while !reader.eof() {
 	                    let op = reader.read()?;
@@ -87,10 +96,22 @@ impl RawPvf {
 	                            ir.mov(Reg(Sra), Imm32(v));
 	                            ir.push(Reg(Sra));
 	                        },
+	                        Op::I32Add => {
+	                        	ir.pop(Reg(Sra));
+	                        	ir.pop(Reg(Srd));
+	                        	ir.add(Reg32(Sra), Reg32(Srd));
+	                        	ir.push(Reg(Sra));
+	                        },
+	                        Op::I32Sub => {
+	                        	ir.pop(Reg(Srd));
+	                        	ir.pop(Reg(Sra));
+	                        	ir.sub(Reg32(Sra), Reg32(Srd));
+	                        	ir.push(Reg(Sra));
+	                        },
 	                        Op::I32And => {
 	                        	ir.pop(Reg(Sra));
-	                        	ir.pop(Reg(Src));
-	                        	ir.and(Reg32(Sra), Reg32(Src));
+	                        	ir.pop(Reg(Srd));
+	                        	ir.and(Reg32(Sra), Reg32(Srd));
 	                        	ir.push(Reg(Sra));
 	                        },
 	                        Op::Block { blockty } => {
@@ -158,12 +179,23 @@ impl RawPvf {
 	                            	unreachable!();
 	                            }
 	                        },
+	                        Op::Call { function_index } => {
+	                        	ir.call(IrLabel::AnonymousFunc(function_index));
+	                        },
+	                        Op::LocalGet { local_index } => {
+	                        	ir.mov(Reg(Sra), Local(local_index));
+	                        	ir.push(Reg(Sra));
+	                        }
 	                        unk => todo!("opcode {:?}", unk)
 	                    }
 	                }
 
-	                // irs.push(ir);
-	                ir_pvf.add_func(findex, ir);
+	                let signature = if let Type::Func(signature) = &types[functypes[findex as usize] as usize] {
+	                	IrSignature { params: signature.params().len() as u32, results: signature.results().len() as u32 }
+	                } else {
+	                	unreachable!()
+	                };
+	                ir_pvf.add_func(findex, ir, signature);
 	                findex += 1;
 	            },
 	            _other => {
@@ -171,6 +203,7 @@ impl RawPvf {
 	            }
 	        }
 	    }
+	    println!("IR: {:?}", ir_pvf);
 	    Ok(ir_pvf)
 	}
 }

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::ir::{Ir, IrLabel};
+use crate::ir::{Ir, IrLabel, IrSignature};
 
 pub struct CodeEmitter {
 	pub(crate) code: Vec<u8>,
@@ -34,6 +34,10 @@ impl CodeEmitter {
 	pub(crate) fn pc(&self) -> usize {
 		self.code.len()
 	}
+
+	pub(crate) fn labels_iter(&self) -> std::collections::hash_map::Iter<'_, IrLabel, usize> {
+		self.labels.iter()
+	}
 }
 
 // fn resolve_func_label(findex: u32) -> IrLabel {
@@ -41,5 +45,6 @@ impl CodeEmitter {
 // }
 
 pub trait CodeGenerator {
-	fn compile_func(&self, code: &mut CodeEmitter, body: Ir);
+	fn compile_func(&mut self, code: &mut CodeEmitter, index: u32, body: Ir, signatures: &Vec<Option<IrSignature>>);
+	fn link(&mut self, code: &mut CodeEmitter);
 }

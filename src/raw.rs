@@ -1,5 +1,5 @@
 use crate::{PvfError, IrPvf};
-use crate::ir::{Ir, IrLabel, IrOperand::*, IrReg::*, IrSignature};
+use crate::ir::{Ir, IrLabel, IrOperand::*, IrReg::*, IrCond::*, IrSignature};
 use std::collections::HashMap;
 use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType};
 
@@ -41,6 +41,7 @@ impl RawPvf {
 	    // let mut irs = Vec::new();
 	    let mut ir_pvf = IrPvf::new();
 	    let mut functypes = Vec::new();
+	    let mut local_label_index = 0u32;
 
 	    for payload in Parser::new(0).parse_all(&self.wasm_code) {
 	        match payload? {
@@ -137,8 +138,17 @@ impl RawPvf {
 	                        	ir.mov(Reg(Bfp), Reg(Stp));
 	                        	ir.label(IrLabel::BranchTarget(self.block_index));
 	                        },
-	                        Op::Br { relative_depth } => {
+	                        Op::Br { relative_depth } | Op::BrIf { relative_depth } => {
 	                        	let target_frame = &cstack[cstack.len() - relative_depth as usize - 1];
+	                        	let mut else_label = 0;
+
+	                        	if matches!(op, Op::BrIf { .. }) {
+	                        		ir.pop(Reg(Sra));
+	                        		ir.and(Reg32(Sra), Reg32(Sra));
+	                        		else_label = local_label_index;
+	                        		ir.jmp_if(Zero, IrLabel::LocalLabel(else_label));
+	                        	}
+
 	                        	if target_frame.has_retval {
 	                        		ir.pop(Reg(Sra));
 	                        	}
@@ -147,6 +157,10 @@ impl RawPvf {
 	                        		ir.pop(Reg(Bfp));
 	                        	}
 	                        	ir.jmp(IrLabel::BranchTarget(target_frame.block_index));
+
+	                        	if matches!(op, Op::BrIf { .. }) {
+	                        		ir.label(IrLabel::LocalLabel(else_label));
+	                        	}
 	                        },
 	                        Op::End => {
 	                            if let Some(frame) = cstack.pop() {
@@ -184,6 +198,15 @@ impl RawPvf {
 	                        },
 	                        Op::LocalGet { local_index } => {
 	                        	ir.mov(Reg(Sra), Local(local_index));
+	                        	ir.push(Reg(Sra));
+	                        }
+	                        Op::LocalSet { local_index } => {
+	                        	ir.pop(Reg(Sra));
+	                        	ir.mov(Local(local_index), Reg(Sra));
+	                        }
+	                        Op::LocalTee { local_index } => {
+	                        	ir.pop(Reg(Sra));
+	                        	ir.mov(Local(local_index), Reg(Sra));
 	                        	ir.push(Reg(Sra));
 	                        }
 	                        unk => todo!("opcode {:?}", unk)

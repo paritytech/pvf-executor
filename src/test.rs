@@ -26,6 +26,16 @@ fn i32_bitwise() {
 }
 
 #[test]
+fn i32_math() {
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.add (i32.const 11) (i32.const 31))))"#), ()), 42);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.add (i32.const 86) (i32.const -44))))"#), ()), 42);
+	assert_eq!(test::<_, i32>(wat(r#"(module (func (export "test") (result i32) (i32.add (i32.const -22) (i32.const -20))))"#), ()), -42);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.sub (i32.const 86) (i32.const 44))))"#), ()), 42);
+	assert_eq!(test::<_, i32>(wat(r#"(module (func (export "test") (result i32) (i32.sub (i32.const -22) (i32.const 20))))"#), ()), -42);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.sub (i32.const -11) (i32.const -53))))"#), ()), 42);
+}
+
+#[test]
 fn block() {
 	assert_eq!(
 		test::<_, i32>(wat(r#"
@@ -60,7 +70,50 @@ fn block() {
 		),
 		42
 	);
-	// TODO: `loop` test (after `br_if` is implemented)
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func (export "test") (param i32) (result i32) (local i32 i32)
+					i32.const 3
+					local.set 2
+					(loop (result i32)
+						i32.const 10
+						local.get 1
+						i32.add
+						local.set 1
+						i32.const 1
+						local.get 2
+						i32.sub
+						local.tee 2
+						br_if 0
+						local.get 1
+					)
+					local.get 0
+					i32.add
+				)
+			)"#),
+			(12,)
+		),
+		42
+	);
+}
+
+#[test]
+fn local() {
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func (export "test") (result i32) (local i32)
+					i32.const 21
+					local.tee 0
+					local.get 0
+					i32.add
+				)
+			)"#),
+			()
+		),
+		42
+	);
 }
 
 #[test]

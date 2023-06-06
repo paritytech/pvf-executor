@@ -1,4 +1,4 @@
-use crate::{CodeGenerator, codegen::CodeEmitter, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*, IrLabel, IrSignature}};
+use crate::{CodeGenerator, codegen::CodeEmitter, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*, IrCond, IrCond::*, IrLabel, IrSignature}};
 
 pub struct IntelX64Compiler {
 	call_targets: Vec<CallTarget>,
@@ -58,6 +58,12 @@ const fn native_reg(r: &IrReg) -> u8 {
 	}
 }
 
+const fn native_cond(cond: &IrCond) -> u8 {
+	match cond {
+		Zero => 0x04,
+	}
+}
+
 const fn ffp() -> u8 { native_reg(&Ffp) }
 
 struct JmpTarget(usize, IrLabel);
@@ -110,7 +116,7 @@ impl CodeGenerator for IntelX64Compiler {
 							// All the locals are guaranteed to be initialized to zero
 							emit!(0x31, MOD_REG | AX << 3 | AX); // xor eax, eax
 
-							for _ in 0..n_params {
+							for _ in 0..*n_locals {
 								emit!(0x50 | AX); // push rax
 							}
 						}
@@ -154,6 +160,15 @@ impl CodeGenerator for IntelX64Compiler {
 								code.emit_imm32_le(-(*index as i32 + 1) * 8);
 							}
 						},
+						(Local(index), Reg(rsrc)) => {
+							// mov [ffp-local_off], <sreg>
+							if *index < 15 {
+								emit!(REX_W, 0x89, MOD_DISP8 | native_reg(rsrc) << 3 | ffp(), -((*index as i8 + 1) * 8) as u8);
+							} else {
+								emit!(REX_W, 0x8b, MOD_DISP32 | native_reg(rsrc) << 3 | ffp());
+								code.emit_imm32_le(-(*index as i32 + 1) * 8);
+							}
+						},
 						unk => todo!("ir Mov {:?}", unk),
 					}
 				},
@@ -187,6 +202,12 @@ impl CodeGenerator for IntelX64Compiler {
 				Jmp(label) => {
 					// jmp near rel32 (no address just yet)
 					emit!(0xe9);
+					jmp_targets.push(JmpTarget(code.pc(), label.clone()));
+					code.emit_imm32_le(0);
+				},
+				JmpIf(cond, label) => {
+					// jcc near rel32 (no address just yet)
+					emit!(0x0f, 0x80 | native_cond(cond));
 					jmp_targets.push(JmpTarget(code.pc(), label.clone()));
 					code.emit_imm32_le(0);
 				},

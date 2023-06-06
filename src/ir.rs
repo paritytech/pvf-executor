@@ -34,6 +34,7 @@ pub enum IrCp {
     Sub(IrOperand, IrOperand),
     And(IrOperand, IrOperand),
     Jmp(IrLabel),
+    JmpIf(IrCond, IrLabel),
     Call(IrLabel),
     Ret,
 }
@@ -44,6 +45,12 @@ pub enum IrLabel {
     AnonymousFunc(u32),
     ImportedFunc(u32),
     BranchTarget(u64),
+    LocalLabel(u32),
+}
+
+#[derive(Debug, Clone)]
+pub enum IrCond {
+    Zero
 }
 
 #[derive(Clone)]
@@ -92,6 +99,10 @@ impl Ir {
 
     pub fn jmp(&mut self, target: IrLabel) {
         self.0.push(IrCp::Jmp(target));
+    }
+
+    pub fn jmp_if(&mut self, cond: IrCond, target: IrLabel) {
+        self.0.push(IrCp::JmpIf(cond, target));
     }
 
     pub fn call(&mut self, target: IrLabel) {

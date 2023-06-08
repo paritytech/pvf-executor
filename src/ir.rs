@@ -16,8 +16,9 @@ pub enum IrOperand {
 	Reg8(IrReg),
 	Reg16(IrReg),
 	Reg32(IrReg),
-	MemDirect(IrLabel),
-	MemIndirect(IrReg, IrReg, u8, u32),
+	Memory8(i32, IrReg),
+	Memory32(i32, IrReg),
+	// MemIndirect(IrReg, IrReg, u8, u32),
 	Imm32(i32),
 	Imm64(i64),
     Local(u32),
@@ -30,6 +31,7 @@ pub enum IrCp {
     Push(IrOperand),
     Pop(IrOperand),
     Mov(IrOperand, IrOperand),
+    ZeroExtend(IrOperand),
     Add(IrOperand, IrOperand),
     Sub(IrOperand, IrOperand),
     And(IrOperand, IrOperand),
@@ -85,6 +87,10 @@ impl Ir {
         self.0.push(IrCp::Mov(dest, src));
     }
 
+    pub fn zx(&mut self, src: IrOperand) {
+        self.0.push(IrCp::ZeroExtend(src));
+    }
+
     pub fn add(&mut self, dest: IrOperand, src: IrOperand) {
         self.0.push(IrCp::Add(dest, src));
     }
@@ -117,7 +123,8 @@ impl Ir {
 #[derive(Debug)]
 pub struct IrPvf {
     funcs: Vec<Option<Ir>>,
-    signatures: Vec<Option<IrSignature>>
+    signatures: Vec<Option<IrSignature>>,
+    memory: (u32, u32),
 }
 
 impl std::fmt::Debug for Ir {
@@ -138,7 +145,7 @@ pub struct IrSignature {
 
 impl IrPvf {
     pub(crate) fn new() -> Self {
-        Self { funcs: Vec::new(), signatures: Vec::new() }
+        Self { funcs: Vec::new(), signatures: Vec::new(), memory: (0, 0) }
     }
 
     pub(crate) fn add_func(&mut self, index: u32, body: Ir, signature: IrSignature) {
@@ -148,6 +155,10 @@ impl IrPvf {
         }
         self.funcs[index as usize] = Some(body);
         self.signatures[index as usize] = Some(signature);
+    }
+
+    pub(crate) fn set_memory(&mut self, min: u32, max: u32) {
+        self.memory = (min, max);
     }
 
     pub fn compile(self, codegen: &mut dyn CodeGenerator) -> PreparedPvf {
@@ -162,6 +173,6 @@ impl IrPvf {
 
         println!("CODE: {:02X?}", code.code);
 
-        PreparedPvf { code: code.code, labels: code.labels }
+        PreparedPvf { code: code.code, labels: code.labels, relocs: code.relocs, memory: self.memory }
     }
 }

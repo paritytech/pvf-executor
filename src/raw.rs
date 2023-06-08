@@ -42,6 +42,8 @@ impl RawPvf {
 	    let mut ir_pvf = IrPvf::new();
 	    let mut functypes = Vec::new();
 	    let mut local_label_index = 0u32;
+	    let mut mem_initial = 0;
+	    let mut mem_max = 0;
 
 	    for payload in Parser::new(0).parse_all(&self.wasm_code) {
 	        match payload? {
@@ -51,6 +53,14 @@ impl RawPvf {
 	            Payload::FunctionSection(reader) => {
 	            	functypes = reader.into_iter().flatten().collect::<Vec<_>>();
 	            },
+	            Payload::MemorySection(reader) => {
+	            	let mem = reader.into_iter().next().expect("Memory section contains a single memory entry").expect("Memory section parsed successfully");
+	            	assert!(!mem.memory64);
+	            	assert!(!mem.shared);
+	            	mem_initial = mem.initial as u32;
+	            	mem_max = if let Some(max) = mem.maximum { max as u32 } else { mem_initial };
+	            	ir_pvf.set_memory(mem_initial, mem_max);
+	            }
 	            Payload::ImportSection(reader) => {
 	                imports = reader.into_iter().flatten().collect::<Vec<_>>();
 	                findex = imports.len() as u32;
@@ -208,7 +218,19 @@ impl RawPvf {
 	                        	ir.pop(Reg(Sra));
 	                        	ir.mov(Local(local_index), Reg(Sra));
 	                        	ir.push(Reg(Sra));
+	                        },
+	                        Op::I32Store { memarg } => {
+	                        	ir.pop(Reg(Sra));
+	                        	ir.pop(Reg(Srd));
+	                        	ir.mov(Memory32(memarg.offset as i32, Srd), Reg32(Sra));
+	                        },
+	                        Op::I32Load8U { memarg } => {
+	                        	ir.pop(Reg(Srd));
+	                        	ir.mov(Reg8(Sra), Memory8(memarg.offset as i32, Srd));
+	                        	ir.zx(Reg8(Sra));
+	                        	ir.push(Reg(Sra));
 	                        }
+
 	                        unk => todo!("opcode {:?}", unk)
 	                    }
 	                }

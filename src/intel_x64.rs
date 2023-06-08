@@ -1,4 +1,4 @@
-use crate::{CodeGenerator, codegen::CodeEmitter, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*, IrCond, IrCond::*, IrLabel, IrSignature}};
+use crate::{CodeGenerator, codegen::{CodeEmitter, Relocation}, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*, IrCond, IrCond::*, IrLabel, IrSignature}};
 
 pub struct IntelX64Compiler {
 	call_targets: Vec<CallTarget>,
@@ -28,6 +28,7 @@ const R8: u8 = 0;
 const R9: u8 = 1;
 const R10: u8 = 2;
 const R11: u8 = 3;
+const R15: u8 = 7;
 
 const REX_B: u8 = 0x41;
 const REX_X: u8 = 0x42;
@@ -38,6 +39,7 @@ const MOD_RM: u8 = 0x00;
 const MOD_DISP8: u8 = 0x40;
 const MOD_DISP32: u8 = 0x80;
 const MOD_REG: u8 = 0xc0;
+const MOD_SIB: u8 = 0x04;
 
 const SIB1: u8 = 0x00;
 const SIB2: u8 = 0x40;
@@ -120,8 +122,13 @@ impl CodeGenerator for IntelX64Compiler {
 								emit!(0x50 | AX); // push rax
 							}
 						}
-
 					}
+
+					// Use `r15` as a memory reference for future access
+					// FIXME: Use hints to avoid initializing it in functions not accessing memory
+					emit!(REX_W | REX_B, 0xb8 | R15); // movabs r15, imm64
+					code.reloc(Relocation::MemoryAbsolute64);
+					code.emit_imm64_le(0);
 				},
 				Push(op) => {
 					match op {
@@ -169,9 +176,24 @@ impl CodeGenerator for IntelX64Compiler {
 								code.emit_imm32_le(-(*index as i32 + 1) * 8);
 							}
 						},
+						(Memory32(offset, raddr), Reg32(rsrc)) => {
+							// TODO: Optimize for zero offset
+							emit!(REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 << 6 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc32>
+							code.emit_imm32_le(*offset);
+						},
+						(Reg8(rdest), Memory8(offset, raddr)) => {
+							emit!(REX_B, 0x8a, MOD_DISP32 | native_reg(rdest) << 3 | MOD_SIB, SIB1 << 6 | native_reg(raddr) << 3 | R15); // mov <rdest8>, [r15+<raddr>*1+offset]
+							code.emit_imm32_le(*offset);
+						}
 						unk => todo!("ir Mov {:?}", unk),
 					}
 				},
+				ZeroExtend(src) => {
+					match src {
+						Reg8(rsrc) => { emit!(0x0f, 0xb6, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); }, // movzx <rsrc32>, <rsrc8>
+						_ => todo!(),
+					}
+				}
 				Add(dest, src) => {
 					match (dest, src) {
 						(Reg32(rdest), Reg32(rsrc)) => {

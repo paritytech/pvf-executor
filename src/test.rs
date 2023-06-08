@@ -187,3 +187,25 @@ fn call() {
 	// 	42
 	// );
 }
+
+#[test]
+fn memory() {
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func (export "test") (result i32)
+					i32.const 352
+					i32.const 589965607
+					i32.store offset=16
+					i32.const 354
+					i32.load8_u offset=16
+				)
+				(memory 1)
+				(export "memory" (memory 0))
+			)"#),
+			()
+		),
+		42
+	);
+
+}

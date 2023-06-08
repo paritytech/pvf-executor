@@ -1,9 +1,11 @@
-use crate::ir::IrLabel;
+use crate::{ir::IrLabel, codegen::Relocation};
 use std::collections::HashMap;
 
 pub struct PreparedPvf {
 	pub(crate) code: Vec<u8>,
 	pub(crate) labels: HashMap<IrLabel, usize>,
+	pub(crate) relocs: Vec<(Relocation, usize)>,
+	pub(crate) memory: (u32, u32),
 }
 
 impl PreparedPvf {

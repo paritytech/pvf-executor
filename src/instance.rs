@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use memmap::{MmapMut, Mmap};
-use crate::{PreparedPvf, PvfError};
+use crate::{PreparedPvf, PvfError, codegen::Relocation};
 
 trait WasmType: Send {}
 impl WasmType for i32 {}
@@ -51,22 +51,41 @@ impl_wasm_params!(A0 A1 A2 A3 A4 A5 A6 A7 A8 A9 A10 A11);
 
 pub struct PvfInstance {
 	codeseg: Mmap,
+	memseg: Option<MmapMut>,
 	entry_points: HashMap<String, usize>
 }
 
 impl PvfInstance {
 	pub fn instantiate(pvf: &PreparedPvf) -> Self {
+		let mut memseg = None;
+		if pvf.memory.0 > 0 {
+			let mem_len = pvf.memory.1 * 0x10000;
+			let memseg_mmap = MmapMut::map_anon(mem_len as usize).expect("Memory mmap did not fail to create");
+			memseg = Some(memseg_mmap);
+		}
 		let len = (pvf.code_len() | 0xfff) + 1;
-		let mut mmap = match MmapMut::map_anon(len) {
+		let mut codeseg_mmap = match MmapMut::map_anon(len) {
 			Ok(mmap) => mmap,
 			Err(e) => panic!("Cannot create memory map: {:?}", e)
 		};
-		(&mut mmap[..pvf.code_len()]).copy_from_slice(pvf.code());
-		let mmap = match mmap.make_exec() {
+		(&mut codeseg_mmap[..pvf.code_len()]).copy_from_slice(pvf.code());
+
+		for (reloc, off) in &pvf.relocs {
+			match reloc {
+				Relocation::MemoryAbsolute64 => {
+					let memaddr = (memseg.as_ref().expect("Memory initialized")[..]).as_ptr() as usize;
+					(&mut codeseg_mmap[*off..*off + 8]).copy_from_slice(&memaddr.to_le_bytes()[..]);
+				}
+			}
+		}
+
+        println!("ICODE: {:02X?}", &codeseg_mmap[..pvf.code_len()]);
+
+		let codeseg_mmap = match codeseg_mmap.make_exec() {
 			Ok(mmap) => mmap,
 			Err(e) => panic!("Cannot make mmap executable: {:?}", e)
 		};
-		Self { codeseg: mmap, entry_points: pvf.exported_funcs() }
+		Self { codeseg: codeseg_mmap, memseg, entry_points: pvf.exported_funcs() }
 	}
 
 	pub unsafe fn call<F, P, R>(&self, func: F, params: P) -> Result<R, PvfError>

@@ -28,6 +28,7 @@ const R8: u8 = 0;
 const R9: u8 = 1;
 const R10: u8 = 2;
 const R11: u8 = 3;
+const R12: u8 = 4;
 const R15: u8 = 7;
 
 const REX_B: u8 = 0x41;
@@ -73,7 +74,7 @@ struct JmpTarget(usize, IrLabel);
 impl CodeGenerator for IntelX64Compiler {
 	fn compile_func(&mut self, code: &mut CodeEmitter, index: u32, body: Ir, signatures: &Vec<Option<IrSignature>>) {
 		macro_rules! emit {
-			($($e:expr),*) => { $(code.emit($e));* }
+			($($e:expr),*) => { { $(code.emit($e));* } }
 		}
 
 		let mut jmp_targets = Vec::new();
@@ -177,7 +178,7 @@ impl CodeGenerator for IntelX64Compiler {
 							}
 						},
 						(Memory32(offset, raddr), Reg32(rsrc)) => {
-							// TODO: Optimize for zero offset
+							// TODO: Optimize for zero offset and short offsets
 							emit!(REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 << 6 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc32>
 							code.emit_imm32_le(*offset);
 						},
@@ -190,7 +191,7 @@ impl CodeGenerator for IntelX64Compiler {
 				},
 				ZeroExtend(src) => {
 					match src {
-						Reg8(rsrc) => { emit!(0x0f, 0xb6, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); }, // movzx <rsrc32>, <rsrc8>
+						Reg8(rsrc) => emit!(0x0f, 0xb6, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movzx <rsrc32>, <rsrc8>
 						_ => todo!(),
 					}
 				}
@@ -237,7 +238,7 @@ impl CodeGenerator for IntelX64Compiler {
 					let findex = *match label {
 						IrLabel::AnonymousFunc(idx) => idx,
 						IrLabel::ExportedFunc(idx, _) => idx,
-						IrLabel::ImportedFunc(_idx) => todo!(),
+						IrLabel::ImportedFunc(idx, _addr) => idx,
 						_ => unreachable!(),
 					} as usize;
 					let signature = if let Some(signature) = &signatures[findex] { signature } else { unreachable!() }; 
@@ -284,19 +285,42 @@ impl CodeGenerator for IntelX64Compiler {
 							emit!(REX_W | REX_B, 0x39, MOD_REG | BP << 3 | R11); // cmp r11, rbp
 							emit!(0x73, 0xe5); // jae l2
 							// l3:
+						} else {
+							// No stack parameters, but stack alignment is still required
+							emit!(REX_W | REX_B, 0x89, MOD_REG | SP << 3 | R12); // mov r12, rsp
+							emit!(REX_W, 0x83, MOD_REG | 0x4 << 3 | SP, 0xf0); // and rsp, -16
+
 						}
+					} else {
+						// No parameters, but stack alignment is still required
+						emit!(REX_W | REX_B, 0x89, MOD_REG | SP << 3 | R12); // mov r12, rsp
+						emit!(REX_W, 0x83, MOD_REG | 0x4 << 3 | SP, 0xf0); // and rsp, -16
 					}
-					emit!(0xe8); // call near (no address yet)
-					self.call_targets.push(CallTarget { offset: code.pc(), func_index: findex as u32 });
-					code.emit_imm32_le(0);
+					match label {
+						IrLabel::AnonymousFunc(_) | IrLabel::ExportedFunc(_, _) => {
+							emit!(0xe8); // call near (no address yet)
+							self.call_targets.push(CallTarget { offset: code.pc(), func_index: findex as u32 });
+							code.emit_imm32_le(0);
+						},
+						IrLabel::ImportedFunc(_, addr) => {
+							emit!(REX_W, 0xb8); // movabs rax, ...
+							code.emit_imm64_le(*addr as i64);
+							emit!(0xff, MOD_REG | 0x2 << 3 | AX); // call rax
+						},
+						_ => unreachable!()
+					}
 					if n_params > 0 {
 						if n_stack_params > 0 {
 							// rsp points to the bottom of the ABI frame. Offsets to the stored
 							// rsp and rbp values are known
 							emit!(REX_W, 0x8b, MOD_DISP8 | BP << 3 | SP, SIB1 | SP << 3 | SP, (n_stack_params + 1) as u8 * 8); // mov rbp, [rsp + storeb_bp_off]
 							emit!(REX_W, 0x8b, MOD_DISP8 | SP << 3 | SP, SIB1 | SP << 3 | SP, n_stack_params as u8 * 8); // mov rsp, [rsp + storeb_sp_off]
+						} else {
+							emit!(REX_W | REX_R, 0x89, MOD_REG | R12 << 3 | SP); // mov rsp, r12
 						}
 						emit!(REX_W, 0x83, MOD_REG | 0x0 << 3 | SP, (n_params as u8) * 8); // add rsp, n_params * 8
+					} else {
+						emit!(REX_W | REX_R, 0x89, MOD_REG | R12 << 3 | SP); // mov rsp, r12
 					}
 					if signature.results > 0 {
 						emit!(0x50 | AX); // push rax

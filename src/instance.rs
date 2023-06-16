@@ -72,10 +72,11 @@ impl PvfInstance {
 
 		for (reloc, off) in &pvf.relocs {
 			match reloc {
-				Relocation::MemoryAbsolute64 => {
+				Relocation::MemoryAbsolute64 if memseg.is_some() => { // FIXME: Do not generate relocations if no memory
 					let memaddr = (memseg.as_ref().expect("Memory initialized")[..]).as_ptr() as usize;
 					(&mut codeseg_mmap[*off..*off + 8]).copy_from_slice(&memaddr.to_le_bytes()[..]);
-				}
+				},
+				_ => () // FIXME
 			}
 		}
 

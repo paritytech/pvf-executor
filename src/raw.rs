@@ -1,7 +1,7 @@
 use crate::{PvfError, IrPvf};
 use crate::ir::{Ir, IrLabel, IrOperand::*, IrReg::*, IrCond::*, IrSignature};
 use std::collections::HashMap;
-use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType};
+use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType, Import, TypeRef, FuncType};
 
 enum ControlFrameType {
     Func,
@@ -16,27 +16,35 @@ struct ControlFrame {
     has_retval: bool,
 }
 
+type ImportResolver = fn(&str, &str, &Type) -> Result<*const u8, PvfError>;
+
 pub struct RawPvf {
 	wasm_code: Vec<u8>,
 	block_index: u64,
+	import_resolver: Option<ImportResolver>,
 }
 
 impl RawPvf {
 	pub fn from_bytes(bytes: &[u8]) -> Self {
-		Self { wasm_code: Vec::from(&bytes[..]), block_index: 0 }
+		Self { wasm_code: Vec::from(&bytes[..]), block_index: 0, import_resolver: None }
 	}
 
 	pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self, PvfError> {
 		let wasm_code = std::fs::read(path).map_err(PvfError::FilesystemError)?;
-		Ok(Self { wasm_code, block_index: 0 })
+		Ok(Self { wasm_code, block_index: 0, import_resolver: None })
+	}
+
+	pub fn set_import_resolver(&mut self, resolver: ImportResolver) {
+		self.import_resolver = Some(resolver);
 	}
 
 	pub fn translate(mut self) -> Result<IrPvf, PvfError> {
 	    let mut types = Vec::new();
-	    let mut imports;
+	    // let mut imports;
 	    // let mut exports;
 	    let mut findex = 0u32;
 	    let mut nimports = 0u32;
+	    let mut imports = Vec::new();
 	    let mut func_export: HashMap<u32, &str> = HashMap::new();
 	    // let mut irs = Vec::new();
 	    let mut ir_pvf = IrPvf::new();
@@ -49,9 +57,36 @@ impl RawPvf {
 	        match payload? {
 	            Payload::TypeSection(reader) => {
 	                types = reader.into_iter().flatten().collect::<Vec<_>>();
+	            	println!("TYPES {:?}", types);
+	            },
+	            Payload::ImportSection(reader) => {
+	            	for import in reader.into_iter() {
+	            		let import = import.unwrap();
+	            		match import.ty {
+	            			TypeRef::Func(ti) => {
+	            				if let Some(resolver) = self.import_resolver {
+	            					let funcref = resolver(import.module, import.name, &types[ti as usize]).map_err(|_| PvfError::UnresolvedImport(import.module.to_owned() + "::" + import.name))?;
+	            					let Type::Func(functype) = &types[ti as usize];
+					                let signature = IrSignature { params: functype.params().len() as u32, results: functype.results().len() as u32 };
+					                ir_pvf.add_import(findex, funcref, signature);
+		            				imports.push(funcref);
+		            				functypes.push(ti);
+		            				nimports = imports.len() as u32;
+		            				findex = nimports;
+	            				} else {
+	            					panic!("Import is requested but no import resolver was specified");
+	            				}
+	            			},
+	            			_ => todo!()
+	            		}
+	            	}
+	                // imports = reader.into_iter().flatten().collect::<Vec<_>>();
+	                // findex = imports.len() as u32;
+	                // nimports = findex;
 	            },
 	            Payload::FunctionSection(reader) => {
-	            	functypes = reader.into_iter().flatten().collect::<Vec<_>>();
+	            	functypes.extend(reader.into_iter().flatten());
+	            	println!("FUNCTYPES {:?}", functypes);
 	            },
 	            Payload::MemorySection(reader) => {
 	            	let mem = reader.into_iter().next().expect("Memory section contains a single memory entry").expect("Memory section parsed successfully");
@@ -61,11 +96,6 @@ impl RawPvf {
 	            	mem_max = if let Some(max) = mem.maximum { max as u32 } else { mem_initial };
 	            	ir_pvf.set_memory(mem_initial, mem_max);
 	            }
-	            Payload::ImportSection(reader) => {
-	                imports = reader.into_iter().flatten().collect::<Vec<_>>();
-	                findex = imports.len() as u32;
-	                nimports = findex;
-	            },
 	            Payload::ExportSection(reader) => {
 	                // exports = reader.into_iter().collect::<Vec<_>>();
 	                for export in reader.into_iter() {
@@ -204,7 +234,11 @@ impl RawPvf {
 	                            }
 	                        },
 	                        Op::Call { function_index } => {
-	                        	ir.call(IrLabel::AnonymousFunc(function_index));
+	                        	ir.call(if function_index < nimports {
+	                        		IrLabel::ImportedFunc(function_index, imports[function_index as usize])
+	                        	} else {
+	                        		IrLabel::AnonymousFunc(function_index)
+	                        	});
 	                        },
 	                        Op::LocalGet { local_index } => {
 	                        	ir.mov(Reg(Sra), Local(local_index));
@@ -235,11 +269,8 @@ impl RawPvf {
 	                    }
 	                }
 
-	                let signature = if let Type::Func(signature) = &types[functypes[findex as usize] as usize] {
-	                	IrSignature { params: signature.params().len() as u32, results: signature.results().len() as u32 }
-	                } else {
-	                	unreachable!()
-	                };
+	                let Type::Func(signature) = &types[functypes[findex as usize] as usize];
+	                let signature = IrSignature { params: signature.params().len() as u32, results: signature.results().len() as u32 };
 	                ir_pvf.add_func(findex, ir, signature);
 	                findex += 1;
 	            },

@@ -45,7 +45,7 @@ pub enum IrCp {
 pub enum IrLabel {
     ExportedFunc(u32, String),
     AnonymousFunc(u32),
-    ImportedFunc(u32),
+    ImportedFunc(u32, *const u8),
     BranchTarget(u64),
     LocalLabel(u32),
 }
@@ -120,9 +120,15 @@ impl Ir {
     }
 }
 
+#[derive(Debug, Clone)]
+enum IrFunc {
+	Import(*const u8),
+	Function(Ir),
+}
+
 #[derive(Debug)]
 pub struct IrPvf {
-    funcs: Vec<Option<Ir>>,
+    funcs: Vec<Option<IrFunc>>,
     signatures: Vec<Option<IrSignature>>,
     memory: (u32, u32),
 }
@@ -148,12 +154,22 @@ impl IrPvf {
         Self { funcs: Vec::new(), signatures: Vec::new(), memory: (0, 0) }
     }
 
-    pub(crate) fn add_func(&mut self, index: u32, body: Ir, signature: IrSignature) {
+    fn ensure_func_vec_size(&mut self, index: u32) {
         if index as usize >= self.funcs.len() {
             self.funcs.resize(index as usize + 1, None);
             self.signatures.resize(index as usize + 1, None);
         }
-        self.funcs[index as usize] = Some(body);
+    }
+
+    pub(crate) fn add_func(&mut self, index: u32, body: Ir, signature: IrSignature) {
+    	self.ensure_func_vec_size(index);
+        self.funcs[index as usize] = Some(IrFunc::Function(body));
+        self.signatures[index as usize] = Some(signature);
+    }
+
+    pub(crate) fn add_import(&mut self, index: u32, addr: *const u8, signature: IrSignature) {
+    	self.ensure_func_vec_size(index);
+        self.funcs[index as usize] = Some(IrFunc::Import(addr));
         self.signatures[index as usize] = Some(signature);
     }
 
@@ -165,7 +181,7 @@ impl IrPvf {
         let mut code = CodeEmitter::new();
 
         for (func_idx, maybe_ir) in self.funcs.into_iter().enumerate() {
-            if let Some(ir) = maybe_ir {
+            if let Some(IrFunc::Function(ir)) = maybe_ir {
                 codegen.compile_func(&mut code, func_idx as u32, ir, &self.signatures);
             }
         }

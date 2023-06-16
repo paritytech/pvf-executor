@@ -1,11 +1,36 @@
-use crate::{RawPvf, IntelX64Compiler, PvfInstance, instance::{WasmResultType, WasmParams}};
+use crate::{RawPvf, IntelX64Compiler, PvfInstance, instance::{WasmResultType, WasmParams}, PvfError};
 
 fn wat(code: &str) -> Vec<u8> {
 	wat::parse_str(code).unwrap()
 }
 
 fn test<P: WasmParams, R: WasmResultType>(code: Vec<u8>, params: P) -> R {
-    let raw = RawPvf::from_bytes(&code);
+    let raw: RawPvf = RawPvf::from_bytes(&code);
+    let ir = raw.translate().unwrap();
+    let mut codegen = IntelX64Compiler::new();
+    let pvf = ir.compile(&mut codegen);
+    let instance = PvfInstance::instantiate(&pvf);
+    unsafe { instance.call::<_, _, R>("test", params) }.unwrap()
+}
+
+#[no_mangle]
+extern "C" fn add2(x: i32) -> i32 {
+	println!("Adding 2");
+	x + 2
+}
+
+fn test_with_imports<P: WasmParams, R: WasmResultType>(code: Vec<u8>, params: P) -> R {
+    let mut raw = RawPvf::from_bytes(&code);
+    raw.set_import_resolver(|module, name, _ty| {
+    	if module == "env" {
+    		match name {
+    			"add2" => Ok(add2 as *const u8),
+    			_ => Err(PvfError::UnresolvedImport(name.to_owned())),
+    		}
+    	} else {
+    		Err(PvfError::UnresolvedImport(name.to_owned()))
+    	}
+    });
     let ir = raw.translate().unwrap();
     let mut codegen = IntelX64Compiler::new();
     let pvf = ir.compile(&mut codegen);
@@ -208,4 +233,21 @@ fn memory() {
 		42
 	);
 
+}
+
+#[test]
+fn import_func() {
+	assert_eq!(
+		test_with_imports::<_, i32>(wat(r#"
+			(module
+				(import "env" "add2" (func $add2 (param i32) (result i32)))
+				(func (export "test") (result i32)
+					i32.const 40
+					call $add2
+				)
+			)"#),
+			()
+		),
+		42
+	);
 }

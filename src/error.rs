@@ -6,6 +6,7 @@ pub enum PvfError {
 	FilesystemError(std::io::Error),
 	ParseError(BinaryReaderError),
 	ExportNotFound,
+	UnresolvedImport(String),
 }
 
 impl From<BinaryReaderError> for PvfError {

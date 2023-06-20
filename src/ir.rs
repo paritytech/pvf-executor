@@ -32,11 +32,16 @@ pub enum IrCp {
     Pop(IrOperand),
     Mov(IrOperand, IrOperand),
     ZeroExtend(IrOperand),
+    SignExtend(IrOperand),
+    Compare(IrCond, IrOperand, IrOperand),
+    CheckIfZero(IrOperand),
     Add(IrOperand, IrOperand),
     Sub(IrOperand, IrOperand),
     And(IrOperand, IrOperand),
-    Jmp(IrLabel),
-    JmpIf(IrCond, IrLabel),
+    Or(IrOperand, IrOperand),
+    Xor(IrOperand, IrOperand),
+    Jump(IrLabel),
+    JumpIf(IrCond, IrLabel),
     Call(IrLabel),
     Ret,
 }
@@ -52,7 +57,17 @@ pub enum IrLabel {
 
 #[derive(Debug, Clone)]
 pub enum IrCond {
-    Zero
+    Zero,
+    Equal,
+    NotEqual,
+    LessSigned,
+    LessUnsigned,
+    GreaterSigned,
+    GreaterUnsigned,
+    LessOrEqualSigned,
+    LessOrEqualUnsigned,
+    GreaterOrEqualSigned,
+    GreaterOrEqualUnsigned,
 }
 
 #[derive(Clone)]
@@ -99,16 +114,32 @@ impl Ir {
         self.0.push(IrCp::Sub(dest, src));
     }
 
+    pub fn compare(&mut self, cond: IrCond, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::Compare(cond, dest, src));
+    }
+
+    pub fn check_if_zero(&mut self, op: IrOperand) {
+    	self.0.push(IrCp::CheckIfZero(op));
+    }
+
     pub fn and(&mut self, dest: IrOperand, src: IrOperand) {
         self.0.push(IrCp::And(dest, src));
     }
 
-    pub fn jmp(&mut self, target: IrLabel) {
-        self.0.push(IrCp::Jmp(target));
+    pub fn or(&mut self, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::Or(dest, src));
     }
 
-    pub fn jmp_if(&mut self, cond: IrCond, target: IrLabel) {
-        self.0.push(IrCp::JmpIf(cond, target));
+    pub fn xor(&mut self, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::Xor(dest, src));
+    }
+
+    pub fn jump(&mut self, target: IrLabel) {
+        self.0.push(IrCp::Jump(target));
+    }
+
+    pub fn jump_if(&mut self, cond: IrCond, target: IrLabel) {
+        self.0.push(IrCp::JumpIf(cond, target));
     }
 
     pub fn call(&mut self, target: IrLabel) {

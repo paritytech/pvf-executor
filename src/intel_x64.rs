@@ -64,6 +64,16 @@ const fn native_reg(r: &IrReg) -> u8 {
 const fn native_cond(cond: &IrCond) -> u8 {
 	match cond {
 		Zero => 0x04,
+		Equal => 0x04,
+		NotEqual => 0x05,
+		LessSigned => 0x0c,
+		LessUnsigned => 0x02,
+		GreaterSigned => 0x0f,
+		GreaterUnsigned => 0x07,
+		LessOrEqualSigned => 0x0e,
+		LessOrEqualUnsigned => 0x06,
+		GreaterOrEqualSigned => 0x0d,
+		GreaterOrEqualUnsigned => 0x03,
 	}
 }
 
@@ -156,8 +166,13 @@ impl CodeGenerator for IntelX64Compiler {
 						},
 						(Reg(rdest), Imm64(imm)) => {
 							// mov <dreg>, <imm64>
-							emit!(REX_W, 0xb8 | native_reg(rdest));
-							code.emit_imm64_le(*imm);
+							if *imm > 0 && *imm < u32::MAX as i64 {
+								emit!(0xb8 | native_reg(rdest));
+								code.emit_imm32_le(*imm as i32);
+							} else {
+								emit!(REX_W, 0xb8 | native_reg(rdest));
+								code.emit_imm64_le(*imm);
+							}
 						},
 						(Reg(rdest), Local(index)) => {
 							// mov <dreg>, [ffp-local_off]
@@ -192,43 +207,89 @@ impl CodeGenerator for IntelX64Compiler {
 				ZeroExtend(src) => {
 					match src {
 						Reg8(rsrc) => emit!(0x0f, 0xb6, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movzx <rsrc32>, <rsrc8>
-						_ => todo!(),
+						Reg16(rsrc) => emit!(0x0f, 0xb7, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movzx <rsrc32>, <rsrc16>
+						Reg32(_) => (),
+						_ => unreachable!(),
 					}
-				}
+				},
+				SignExtend(src) => {
+					match src {
+						Reg8(rsrc) => emit!(REX_W, 0x0f, 0xbe, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movsx <rsrc>, <rsrc8>
+						Reg16(rsrc) => emit!(REX_W, 0x0f, 0xbf, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movsx <rsrc>, <rsrc16>
+						Reg32(rsrc) => emit!(REX_W, 0x63, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movsxd <rsrc>, <rsrc32>
+						_ => unreachable!(),
+					}
+				},
 				Add(dest, src) => {
 					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => {
-							// add <dreg>, <sreg>
-							emit!(0x01, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest));
-						},
+						(Reg32(rdest), Reg32(rsrc)) => emit!(0x01, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // add <dreg32>, <sreg32>
+						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x01, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // add <dreg32>, <sreg32>
 						_ => todo!()
 					}
 				},
 				Sub(dest, src) => {
 					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => {
-							// add <dreg>, <sreg>
-							emit!(0x29, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest));
-						},
+						(Reg32(rdest), Reg32(rsrc)) => emit!(0x29, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // sub <dreg32>, <sreg32>
+						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x29, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // sub <dreg>, <sreg>
 						_ => todo!()
+					}
+				},
+				Compare(cond, dest, src) => {
+					match (dest, src) {
+						(Reg32(rdest), Reg32(rsrc)) => {
+							emit!(0x39, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)); // cmp <dreg32>, <sreg32>
+							emit!(0x0f, 0x90 | native_cond(cond), MOD_REG | native_reg(rdest)); // setcc <dreg8>
+							emit!(0x0f, 0xb6, MOD_REG | native_reg(rdest) << 3 | native_reg(rdest)); // movzx <dreg32>, <dreg8>
+						},
+						(Reg(rdest), Reg(rsrc)) => {
+							emit!(REX_W, 0x39, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)); // cmp <dreg32>, <sreg32>
+							emit!(0x0f, 0x90 | native_cond(cond), MOD_REG | native_reg(rdest)); // setcc <dreg8>
+							emit!(0x0f, 0xb6, MOD_REG | native_reg(rdest) << 3 | native_reg(rdest)); // movzx <dreg32>, <dreg8>
+						},
+						_ => unreachable!()
+					}
+				},
+				CheckIfZero(src) => {
+					match src {
+						Reg(rsrc) | Reg32(rsrc) => {
+							if matches!(src, Reg(_)) {
+								emit!(REX_W)
+							}
+							emit!(0x85, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // test <sreg[32]>, <sreg[32]>
+							emit!(0x0f, 0x94 | native_cond(&Zero), MOD_REG | native_reg(rsrc)); // setz <sreg8>
+							emit!(0x0f, 0xb6, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // movzx <sreg32>, <sreg8>
+						},
+						_ => unreachable!()
 					}
 				},
 				And(dest, src) => {
 					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => {
-							// and <dreg>, <sreg>
-							emit!(0x21, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest));
-						},
+						(Reg32(rdest), Reg32(rsrc)) => emit!(0x21, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // and <dreg32>, <sreg32>
+						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x21, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // and <dreg>, <sreg>
 						_ => todo!()
 					}
 				},
-				Jmp(label) => {
+				Or(dest, src) => {
+					match (dest, src) {
+						(Reg32(rdest), Reg32(rsrc)) => emit!(0x09, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // or <dreg32>, <sreg32>
+						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x09, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // or <dreg>, <sreg>
+						_ => todo!()
+					}
+				},
+				Xor(dest, src) => {
+					match (dest, src) {
+						(Reg32(rdest), Reg32(rsrc)) => emit!(0x31, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // xor <dreg32>, <sreg32>
+						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x31, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // xor <dreg>, <sreg>
+						_ => todo!()
+					}
+				},
+				Jump(label) => {
 					// jmp near rel32 (no address just yet)
 					emit!(0xe9);
 					jmp_targets.push(JmpTarget(code.pc(), label.clone()));
 					code.emit_imm32_le(0);
 				},
-				JmpIf(cond, label) => {
+				JumpIf(cond, label) => {
 					// jcc near rel32 (no address just yet)
 					emit!(0x0f, 0x80 | native_cond(cond));
 					jmp_targets.push(JmpTarget(code.pc(), label.clone()));

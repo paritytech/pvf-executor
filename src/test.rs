@@ -253,7 +253,7 @@ fn block() {
 }
 
 #[test]
-fn local() {
+fn locals() {
 	assert_eq!(
 		test::<_, i32>(wat(r#"
 			(module
@@ -263,6 +263,27 @@ fn local() {
 					local.get 0
 					i32.add
 				)
+			)"#),
+			()
+		),
+		42
+	);
+}
+
+#[test]
+fn globals() {
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func (export "test") (result i32)
+					i32.const 12
+					global.set 1
+					global.get 0
+					global.get 1
+					i32.add
+				)
+				(global i32 (i32.const 30))
+				(global i32 (i32.const 0))
 			)"#),
 			()
 		),

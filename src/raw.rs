@@ -1,7 +1,7 @@
 use crate::{PvfError, IrPvf};
-use crate::ir::{Ir, IrLabel, IrOperand::*, IrReg::*, IrCond::*, IrSignature};
+use crate::ir::{Ir, IrLabel, IrOperand::*, IrReg::*, IrCond::*, IrSignature, IrHints};
 use std::collections::HashMap;
-use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType, Import, TypeRef, FuncType};
+use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType, Import, TypeRef, FuncType, OperatorsReader};
 
 enum ControlFrameType {
 	Func,
@@ -17,6 +17,32 @@ struct ControlFrame {
 }
 
 type ImportResolver = fn(&str, &str, &Type) -> Result<*const u8, PvfError>;
+
+enum GlobalRef {
+	Own { init_ir: Ir },
+	Imported,
+}
+
+fn parse_const_expr(mut reader: OperatorsReader, globals: &Vec<GlobalRef>) -> Result<Ir, PvfError> {
+	let mut ir = Ir::new();
+	while !reader.eof() {
+		let op = reader.read()?;
+		match op {
+			Op::I32Const { value: v } => {
+				ir.mov(Reg(Sra), Imm32(v));
+				ir.push(Reg(Sra));
+			},
+			Op::I64Const { value: v } => {
+				ir.mov(Reg(Sra), Imm64(v));
+				ir.push(Reg(Sra));
+			},
+			Op::End => return Ok(ir),
+			_ => todo!()
+		}
+	}
+
+	Err(PvfError::ValidationError("Constant expression must end with `end` opcode".to_owned()))
+}
 
 pub struct RawPvf {
 	wasm_code: Vec<u8>,
@@ -44,14 +70,17 @@ impl RawPvf {
 		// let mut exports;
 		let mut findex = 0u32;
 		let mut nimports = 0u32;
-		let mut imports = Vec::new();
+		let mut func_imports = Vec::new();
 		let mut func_export: HashMap<u32, &str> = HashMap::new();
 		// let mut irs = Vec::new();
 		let mut ir_pvf = IrPvf::new();
+		let mut init_ir = Ir::new();
 		let mut functypes = Vec::new();
 		let mut local_label_index = 0u32;
 		let mut mem_initial = 0;
 		let mut mem_max = 0;
+		let mut globals = Vec::new();
+		let mut hints = IrHints::default();
 
 		for payload in Parser::new(0).parse_all(&self.wasm_code) {
 			match payload? {
@@ -68,14 +97,17 @@ impl RawPvf {
 									let funcref = resolver(import.module, import.name, &types[ti as usize]).map_err(|_| PvfError::UnresolvedImport(import.module.to_owned() + "::" + import.name))?;
 									let Type::Func(functype) = &types[ti as usize];
 									let signature = IrSignature { params: functype.params().len() as u32, results: functype.results().len() as u32 };
-									ir_pvf.add_import(findex, funcref, signature);
-									imports.push(funcref);
+									ir_pvf.add_func_import(findex, funcref, signature);
+									func_imports.push(funcref);
 									functypes.push(ti);
-									nimports = imports.len() as u32;
+									nimports = func_imports.len() as u32;
 									findex = nimports;
 								} else {
 									panic!("Import is requested but no import resolver was specified");
 								}
+							},
+							TypeRef::Global(_) => {
+								globals.push(GlobalRef::Imported)
 							},
 							_ => todo!()
 						}
@@ -84,8 +116,13 @@ impl RawPvf {
 				Payload::FunctionSection(reader) => {
 					functypes.extend(reader.into_iter().flatten());
 					println!("FUNCTYPES {:?}", functypes);
+					let init_index = functypes.len();
+					init_ir.label(IrLabel::ExportedFunc(init_index as u32, "_pvf_init".to_owned()));
+					init_ir.preamble();
+					init_ir.init_locals(0);
 				},
 				Payload::MemorySection(reader) => {
+					hints.has_memory = true;
 					let mem = reader.into_iter().next().expect("Memory section contains a single memory entry").expect("Memory section parsed successfully");
 					assert!(!mem.memory64);
 					assert!(!mem.shared);
@@ -94,7 +131,6 @@ impl RawPvf {
 					ir_pvf.set_memory(mem_initial, mem_max);
 				}
 				Payload::ExportSection(reader) => {
-					// exports = reader.into_iter().collect::<Vec<_>>();
 					for export in reader.into_iter() {
 						let export = export.unwrap();
 						if export.kind == ExternalKind::Func {
@@ -102,9 +138,18 @@ impl RawPvf {
 						}
 					}
 				},
+				Payload::GlobalSection(reader) => {
+					hints.has_globals = true;
+					for global in reader.into_iter() {
+						let global = global.unwrap();
+						let global_init_ir = parse_const_expr(global.init_expr.get_operators_reader(), &globals )?;
+						init_ir.append(&mut global_init_ir.clone());
+						init_ir.pop(Reg(Sra));
+						init_ir.mov(Global(globals.len() as u32), Reg(Sra));
+						globals.push(GlobalRef::Own { init_ir: global_init_ir })
+					}
+				}
 				Payload::CodeSectionEntry(fbody) => {
-
-
 					let locals_reader = fbody.get_locals_reader()?;
 					let n_locals = locals_reader.into_iter().flatten().fold(0, |a, (n, _)| a + n);
 
@@ -134,6 +179,7 @@ impl RawPvf {
 							IrLabel::AnonymousFunc(findex)
 						}
 					);
+					ir.preamble();
 					ir.push(Reg(Ffp));
 					ir.push(Reg(Bfp));
 					ir.mov(Reg(Ffp), Reg(Stp));
@@ -280,6 +326,7 @@ impl RawPvf {
 											ir.mov(Reg(Stp), Reg(Ffp));
 											ir.pop(Reg(Bfp));
 											ir.pop(Reg(Ffp));
+											ir.postamble();
 											ir.ret();
 										},
 										ControlFrameType::Block | ControlFrameType::Loop => {
@@ -303,7 +350,7 @@ impl RawPvf {
 							},
 							Op::Call { function_index } => {
 								ir.call(if function_index < nimports {
-									IrLabel::ImportedFunc(function_index, imports[function_index as usize])
+									IrLabel::ImportedFunc(function_index, func_imports[function_index as usize])
 								} else {
 									IrLabel::AnonymousFunc(function_index)
 								});
@@ -321,6 +368,14 @@ impl RawPvf {
 								ir.mov(Local(local_index), Reg(Sra));
 								ir.push(Reg(Sra));
 							},
+							Op::GlobalGet { global_index } => {
+								ir.mov(Reg(Sra), Global(global_index));
+								ir.push(Reg(Sra));
+							}
+							Op::GlobalSet { global_index } => {
+								ir.pop(Reg(Sra));
+								ir.mov(Global(global_index), Reg(Sra));
+							}
 							Op::I32Store { memarg } => {
 								ir.pop(Reg(Sra));
 								ir.pop(Reg(Srd));
@@ -329,7 +384,7 @@ impl RawPvf {
 							Op::I32Load8U { memarg } => {
 								ir.pop(Reg(Srd));
 								ir.mov(Reg8(Sra), Memory8(memarg.offset as i32, Srd));
-								ir.zx(Reg8(Sra));
+								ir.zero_extend(Reg8(Sra));
 								ir.push(Reg(Sra));
 							}
 
@@ -347,6 +402,11 @@ impl RawPvf {
 				}
 			}
 		}
+
+		init_ir.postamble();
+		init_ir.ret();
+		ir_pvf.add_func(findex, init_ir, IrSignature { params: 0, results: 0 });
+
 		println!("IR: {:?}", ir_pvf);
 		Ok(ir_pvf)
 	}

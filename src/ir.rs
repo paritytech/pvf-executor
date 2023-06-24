@@ -22,11 +22,13 @@ pub enum IrOperand {
 	Imm32(i32),
 	Imm64(i64),
     Local(u32),
+    Global(u32),
 }
 
 #[derive(Debug, Clone)]
 pub enum IrCp {
     Label(IrLabel),
+    Preamble,
     InitLocals(u32),
     Push(IrOperand),
     Pop(IrOperand),
@@ -43,6 +45,7 @@ pub enum IrCp {
     Jump(IrLabel),
     JumpIf(IrCond, IrLabel),
     Call(IrLabel),
+    Postamble,
     Ret,
 }
 
@@ -82,8 +85,16 @@ impl Ir {
         &self.0
     }
 
+    pub fn append(&mut self, other: &mut Ir) {
+    	self.0.append(&mut other.0);
+    }
+
     pub fn label(&mut self, l: IrLabel) {
         self.0.push(IrCp::Label(l));
+    }
+
+    pub fn preamble(&mut self) {
+    	self.0.push(IrCp::Preamble);
     }
 
     pub fn init_locals(&mut self, n_locals: u32) {
@@ -102,7 +113,7 @@ impl Ir {
         self.0.push(IrCp::Mov(dest, src));
     }
 
-    pub fn zx(&mut self, src: IrOperand) {
+    pub fn zero_extend(&mut self, src: IrOperand) {
         self.0.push(IrCp::ZeroExtend(src));
     }
 
@@ -146,6 +157,10 @@ impl Ir {
         self.0.push(IrCp::Call(target));
     }
 
+    pub fn postamble(&mut self) {
+    	self.0.push(IrCp::Postamble);
+    }
+
     pub fn ret(&mut self) {
     	self.0.push(IrCp::Ret);
     }
@@ -159,7 +174,9 @@ enum IrFunc {
 
 #[derive(Debug)]
 pub struct IrPvf {
+	hints: IrHints,
     funcs: Vec<Option<IrFunc>>,
+    // init_index: usize,
     signatures: Vec<Option<IrSignature>>,
     memory: (u32, u32),
 }
@@ -180,9 +197,16 @@ pub struct IrSignature {
     pub(crate) results: u32,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct IrHints {
+	pub(crate) has_globals: bool,
+	pub(crate) has_memory: bool,
+	pub(crate) has_tables: bool,
+}
+
 impl IrPvf {
     pub(crate) fn new() -> Self {
-        Self { funcs: Vec::new(), signatures: Vec::new(), memory: (0, 0) }
+        Self { hints: IrHints::default(), funcs: Vec::new(), signatures: Vec::new(), memory: (0, 0),  }
     }
 
     fn ensure_func_vec_size(&mut self, index: u32) {
@@ -198,7 +222,7 @@ impl IrPvf {
         self.signatures[index as usize] = Some(signature);
     }
 
-    pub(crate) fn add_import(&mut self, index: u32, addr: *const u8, signature: IrSignature) {
+    pub(crate) fn add_func_import(&mut self, index: u32, addr: *const u8, signature: IrSignature) {
     	self.ensure_func_vec_size(index);
         self.funcs[index as usize] = Some(IrFunc::Import(addr));
         self.signatures[index as usize] = Some(signature);
@@ -206,6 +230,10 @@ impl IrPvf {
 
     pub(crate) fn set_memory(&mut self, min: u32, max: u32) {
         self.memory = (min, max);
+    }
+
+    pub(crate) fn set_hints(&mut self, hints: IrHints) {
+    	self.hints = hints;
     }
 
     pub fn compile(self, codegen: &mut dyn CodeGenerator) -> PreparedPvf {

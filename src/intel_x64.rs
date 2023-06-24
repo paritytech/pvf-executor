@@ -94,6 +94,19 @@ impl CodeGenerator for IntelX64Compiler {
 		for insn in body.code() {
 			match insn {
 				Label(label) => code.label(label.clone()),
+				Preamble => {
+					emit!(REX_W, 0xb8 | AX); // movabs rax, imm64
+					code.reloc(Relocation::MemoryAbsolute64);
+					code.emit_imm64_le(0);
+
+					let temp_storage_off = -0x20000i32;
+					emit!(REX_W | REX_R, 0x89, MOD_DISP32 | R12 << 3 | AX); // mov [rax+<offset>], r12
+					code.emit_imm32_le(temp_storage_off + 12 * 8);
+					emit!(REX_W | REX_R, 0x89, MOD_DISP32 | R15 << 3 | AX); // mov [rax+<offset>], r15
+					code.emit_imm32_le(temp_storage_off + 15 * 8);
+
+					emit!(REX_W | REX_B, 0x89, MOD_REG | AX << 3 | R15); // mov r15, rax
+				}
 				InitLocals(n_locals) => {
 					let n_params = self_signature.params;
 					let n_total = n_locals + n_params;
@@ -134,12 +147,6 @@ impl CodeGenerator for IntelX64Compiler {
 							}
 						}
 					}
-
-					// Use `r15` as a memory reference for future access
-					// FIXME: Use hints to avoid initializing it in functions not accessing memory
-					emit!(REX_W | REX_B, 0xb8 | R15); // movabs r15, imm64
-					code.reloc(Relocation::MemoryAbsolute64);
-					code.emit_imm64_le(0);
 				},
 				Push(op) => {
 					match op {
@@ -183,6 +190,16 @@ impl CodeGenerator for IntelX64Compiler {
 								code.emit_imm32_le(-(*index as i32 + 1) * 8);
 							}
 						},
+						(Reg(rdest), Global(index)) => {
+							let offset = -0x10000i32 + *index as i32 * 8; // FIXME: Account tables
+							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | R15); // mov <rdest>, [r15+<offset>]
+							code.emit_imm32_le(offset);
+						},
+						(Global(index), Reg(rsrc)) => {
+							let offset = -0x10000i32 + *index as i32 * 8; // FIXME: Account tables
+							emit!(REX_W | REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | R15); // mov [r15+<offset>], <rsrc>
+							code.emit_imm32_le(offset);
+						},
 						(Local(index), Reg(rsrc)) => {
 							// mov [ffp-local_off], <sreg>
 							if *index < 15 {
@@ -194,11 +211,11 @@ impl CodeGenerator for IntelX64Compiler {
 						},
 						(Memory32(offset, raddr), Reg32(rsrc)) => {
 							// TODO: Optimize for zero offset and short offsets
-							emit!(REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 << 6 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc32>
+							emit!(REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc32>
 							code.emit_imm32_le(*offset);
 						},
 						(Reg8(rdest), Memory8(offset, raddr)) => {
-							emit!(REX_B, 0x8a, MOD_DISP32 | native_reg(rdest) << 3 | MOD_SIB, SIB1 << 6 | native_reg(raddr) << 3 | R15); // mov <rdest8>, [r15+<raddr>*1+offset]
+							emit!(REX_B, 0x8a, MOD_DISP32 | native_reg(rdest) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov <rdest8>, [r15+<raddr>*1+offset]
 							code.emit_imm32_le(*offset);
 						}
 						unk => todo!("ir Mov {:?}", unk),
@@ -388,7 +405,17 @@ impl CodeGenerator for IntelX64Compiler {
 					}
 
 				},
-				Ret => emit!(0xc3), // ret near
+				Postamble => {
+					let temp_storage_off = -0x20000i32;
+					emit!(REX_W | REX_R | REX_B, 0x8b, MOD_DISP32 | R12 << 3 | R15); // mov r12, [r15+<offset>]
+					code.emit_imm32_le(temp_storage_off + 12 * 8);
+					emit!(REX_W | REX_R | REX_B, 0x8b, MOD_DISP32 | R15 << 3 | R15); // mov r15, [r15+<offset>]
+					code.emit_imm32_le(temp_storage_off + 15 * 8);
+				}
+				Ret => {
+					// emit!(REX_B, 0x58 | R15); // pop r15
+					emit!(0xc3); // ret near
+				}
 				_ => todo!(),
 			}
 		}

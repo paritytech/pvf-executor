@@ -47,6 +47,8 @@ const SIB2: u8 = 0x40;
 const SIB4: u8 = 0x80;
 const SIB8: u8 = 0xc0;
 
+const OPER_SIZE_OVR: u8 = 0x66;
+
 const ABI_PARAM_REGS: [(u8, u8); 6] = [(0, DI), (0, SI), (0, DX), (0, CX), (REX_R, R8), (REX_R, R9)];
 
 const fn native_reg(r: &IrReg) -> u8 {
@@ -160,7 +162,7 @@ impl CodeGenerator for IntelX64Compiler {
 						_ => unreachable!()
 					}
 				},
-				Mov(dest, src) => {
+				Move(dest, src) => {
 					match (dest, src) {
 						(Reg(rdest), Reg(rsrc)) => {
 							// mov <dreg>, <sreg>
@@ -209,13 +211,37 @@ impl CodeGenerator for IntelX64Compiler {
 								code.emit_imm32_le(-(*index as i32 + 1) * 8);
 							}
 						},
+						// TODO: Optimize for zero offset and short offsets
+						(Memory8(offset, raddr), Reg8(rsrc)) => {
+							emit!(REX_B, 0x88, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc8>
+							code.emit_imm32_le(*offset);
+						},
+						(Memory16(offset, raddr), Reg16(rsrc)) => {
+							emit!(OPER_SIZE_OVR, REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc16>
+							code.emit_imm32_le(*offset);
+						},
 						(Memory32(offset, raddr), Reg32(rsrc)) => {
-							// TODO: Optimize for zero offset and short offsets
 							emit!(REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc32>
+							code.emit_imm32_le(*offset);
+						},
+						(Memory64(offset, raddr), Reg(rsrc)) => {
+							emit!(REX_W | REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc>
 							code.emit_imm32_le(*offset);
 						},
 						(Reg8(rdest), Memory8(offset, raddr)) => {
 							emit!(REX_B, 0x8a, MOD_DISP32 | native_reg(rdest) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov <rdest8>, [r15+<raddr>*1+offset]
+							code.emit_imm32_le(*offset);
+						}
+						(Reg16(rdest), Memory16(offset, raddr)) => {
+							emit!(OPER_SIZE_OVR, REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov <rdest16>, [r15+<raddr>*1+offset]
+							code.emit_imm32_le(*offset);
+						}
+						(Reg32(rdest), Memory32(offset, raddr)) => {
+							emit!(REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov <rdest32>, [r15+<raddr>*1+offset]
+							code.emit_imm32_le(*offset);
+						}
+						(Reg(rdest), Memory64(offset, raddr)) => {
+							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov <rdest64>, [r15+<raddr>*1+offset]
 							code.emit_imm32_le(*offset);
 						}
 						unk => todo!("ir Mov {:?}", unk),
@@ -416,7 +442,7 @@ impl CodeGenerator for IntelX64Compiler {
 					// emit!(REX_B, 0x58 | R15); // pop r15
 					emit!(0xc3); // ret near
 				}
-				_ => todo!(),
+				// _ => todo!(),
 			}
 		}
 

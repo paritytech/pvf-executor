@@ -17,7 +17,9 @@ pub enum IrOperand {
 	Reg16(IrReg),
 	Reg32(IrReg),
 	Memory8(i32, IrReg),
+	Memory16(i32, IrReg),
 	Memory32(i32, IrReg),
+	Memory64(i32, IrReg),
 	// MemIndirect(IrReg, IrReg, u8, u32),
 	Imm32(i32),
 	Imm64(i64),
@@ -32,7 +34,7 @@ pub enum IrCp {
     InitLocals(u32),
     Push(IrOperand),
     Pop(IrOperand),
-    Mov(IrOperand, IrOperand),
+    Move(IrOperand, IrOperand),
     ZeroExtend(IrOperand),
     SignExtend(IrOperand),
     Compare(IrCond, IrOperand, IrOperand),
@@ -109,12 +111,16 @@ impl Ir {
         self.0.push(IrCp::Pop(dest));
     }
 
-    pub fn mov(&mut self, dest: IrOperand, src: IrOperand) {
-        self.0.push(IrCp::Mov(dest, src));
+    pub fn r#move(&mut self, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::Move(dest, src));
     }
 
     pub fn zero_extend(&mut self, src: IrOperand) {
         self.0.push(IrCp::ZeroExtend(src));
+    }
+
+    pub fn sign_extend(&mut self, src: IrOperand) {
+        self.0.push(IrCp::SignExtend(src));
     }
 
     pub fn add(&mut self, dest: IrOperand, src: IrOperand) {

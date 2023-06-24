@@ -383,6 +383,45 @@ fn memory() {
 		42
 	);
 
+	// 444 445 446 447 448 449 450 451
+	// AA  BB  CC  DD  11  22  33  44
+	// --  --  ------  --------------
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func (export "test") (result i32)
+					(i64.store offset=32 (i32.const 444) (i64.const 0x44332211DDCCBBAA))
+					(i32.load8_u offset=32 (i32.const 444))
+					(i32.load8_u offset=32 (i32.const 445))
+					(i32.load16_u offset=32 (i32.const 446))
+					(i32.load offset=32 (i32.const 448))
+					(i32.sub (i32.add (i32.add (i32.add))) (i32.const 0x44340118))
+				)
+				(memory 1)
+				(export "memory" (memory 0))
+			)"#),
+			()
+		),
+		42
+	);
+
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func (export "test") (result i32)
+					(i64.store offset=32 (i32.const 444) (i64.const 214))
+					(i32.load8_s offset=32 (i32.const 444))
+					(i32.add (i32.const 84))
+				)
+				(memory 1)
+				(export "memory" (memory 0))
+			)"#),
+			()
+		),
+		42
+	);
+
+	// TODO: Rest of store/load opcodes
 }
 
 #[test]

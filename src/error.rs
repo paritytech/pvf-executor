@@ -5,6 +5,7 @@ use std::error::Error;
 pub enum PvfError {
 	FilesystemError(std::io::Error),
 	ParseError(BinaryReaderError),
+	ValidationError(String),
 	ExportNotFound,
 	UnresolvedImport(String),
 }

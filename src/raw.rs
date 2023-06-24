@@ -29,15 +29,15 @@ fn parse_const_expr(mut reader: OperatorsReader, globals: &Vec<GlobalRef>) -> Re
 		let op = reader.read()?;
 		match op {
 			Op::I32Const { value: v } => {
-				ir.mov(Reg(Sra), Imm32(v));
+				ir.r#move(Reg(Sra), Imm32(v));
 				ir.push(Reg(Sra));
 			},
 			Op::I64Const { value: v } => {
-				ir.mov(Reg(Sra), Imm64(v));
+				ir.r#move(Reg(Sra), Imm64(v));
 				ir.push(Reg(Sra));
 			},
 			Op::End => return Ok(ir),
-			_ => todo!()
+			_ => todo!() // global.get is allowed, but for imported constants only
 		}
 	}
 
@@ -145,7 +145,7 @@ impl RawPvf {
 						let global_init_ir = parse_const_expr(global.init_expr.get_operators_reader(), &globals )?;
 						init_ir.append(&mut global_init_ir.clone());
 						init_ir.pop(Reg(Sra));
-						init_ir.mov(Global(globals.len() as u32), Reg(Sra));
+						init_ir.r#move(Global(globals.len() as u32), Reg(Sra));
 						globals.push(GlobalRef::Own { init_ir: global_init_ir })
 					}
 				}
@@ -182,19 +182,19 @@ impl RawPvf {
 					ir.preamble();
 					ir.push(Reg(Ffp));
 					ir.push(Reg(Bfp));
-					ir.mov(Reg(Ffp), Reg(Stp));
-					ir.mov(Reg(Bfp), Reg(Stp));
+					ir.r#move(Reg(Ffp), Reg(Stp));
+					ir.r#move(Reg(Bfp), Reg(Stp));
 					ir.init_locals(n_locals);
 
 					while !reader.eof() {
 						let op = reader.read()?;
 						match op {
 							Op::I32Const { value: v } => {
-								ir.mov(Reg(Sra), Imm32(v));
+								ir.r#move(Reg(Sra), Imm32(v));
 								ir.push(Reg(Sra));
 							},
 							Op::I64Const { value: v } => {
-								ir.mov(Reg(Sra), Imm64(v));
+								ir.r#move(Reg(Sra), Imm64(v));
 								ir.push(Reg(Sra));
 							}
 							Op::I32Add => {
@@ -278,7 +278,7 @@ impl RawPvf {
 								};
 								cstack.push(ControlFrame { cftype: ControlFrameType::Block, block_index: self.block_index, has_retval });
 								ir.push(Reg(Bfp));
-								ir.mov(Reg(Bfp), Reg(Stp));
+								ir.r#move(Reg(Bfp), Reg(Stp));
 							},
 							Op::Loop { blockty } => {
 								self.block_index += 1;
@@ -289,7 +289,7 @@ impl RawPvf {
 								};
 								cstack.push(ControlFrame { cftype: ControlFrameType::Loop, block_index: self.block_index, has_retval });
 								ir.push(Reg(Bfp));
-								ir.mov(Reg(Bfp), Reg(Stp));
+								ir.r#move(Reg(Bfp), Reg(Stp));
 								ir.label(IrLabel::BranchTarget(self.block_index));
 							},
 							Op::Br { relative_depth } | Op::BrIf { relative_depth } => {
@@ -300,6 +300,7 @@ impl RawPvf {
 									ir.pop(Reg(Sra));
 									ir.and(Reg32(Sra), Reg32(Sra));
 									else_label = local_label_index;
+									local_label_index += 1;
 									ir.jump_if(Zero, IrLabel::LocalLabel(else_label));
 								}
 
@@ -307,7 +308,7 @@ impl RawPvf {
 									ir.pop(Reg(Sra));
 								}
 								for _ in 0..relative_depth {
-									ir.mov(Reg(Stp), Reg(Bfp));
+									ir.r#move(Reg(Stp), Reg(Bfp));
 									ir.pop(Reg(Bfp));
 								}
 								ir.jump(IrLabel::BranchTarget(target_frame.block_index));
@@ -323,7 +324,7 @@ impl RawPvf {
 											if ftype.results().len() > 0 {
 												ir.pop(Reg(Sra));
 											}
-											ir.mov(Reg(Stp), Reg(Ffp));
+											ir.r#move(Reg(Stp), Reg(Ffp));
 											ir.pop(Reg(Bfp));
 											ir.pop(Reg(Ffp));
 											ir.postamble();
@@ -336,7 +337,7 @@ impl RawPvf {
 											if matches!(frame.cftype, ControlFrameType::Block) {
 												ir.label(IrLabel::BranchTarget(frame.block_index));
 											}
-											ir.mov(Reg(Stp), Reg(Bfp));
+											ir.r#move(Reg(Stp), Reg(Bfp));
 											ir.pop(Reg(Bfp));
 											if frame.has_retval {
 												ir.push(Reg(Sra));
@@ -356,37 +357,160 @@ impl RawPvf {
 								});
 							},
 							Op::LocalGet { local_index } => {
-								ir.mov(Reg(Sra), Local(local_index));
+								ir.r#move(Reg(Sra), Local(local_index));
 								ir.push(Reg(Sra));
 							}
 							Op::LocalSet { local_index } => {
 								ir.pop(Reg(Sra));
-								ir.mov(Local(local_index), Reg(Sra));
+								ir.r#move(Local(local_index), Reg(Sra));
 							}
 							Op::LocalTee { local_index } => {
 								ir.pop(Reg(Sra));
-								ir.mov(Local(local_index), Reg(Sra));
+								ir.r#move(Local(local_index), Reg(Sra));
 								ir.push(Reg(Sra));
 							},
 							Op::GlobalGet { global_index } => {
-								ir.mov(Reg(Sra), Global(global_index));
+								ir.r#move(Reg(Sra), Global(global_index));
 								ir.push(Reg(Sra));
 							}
 							Op::GlobalSet { global_index } => {
 								ir.pop(Reg(Sra));
-								ir.mov(Global(global_index), Reg(Sra));
+								ir.r#move(Global(global_index), Reg(Sra));
 							}
-							Op::I32Store { memarg } => {
-								ir.pop(Reg(Sra));
+							Op::I32Load { memarg } => {
 								ir.pop(Reg(Srd));
-								ir.mov(Memory32(memarg.offset as i32, Srd), Reg32(Sra));
+								ir.r#move(Reg32(Sra), Memory32(memarg.offset as i32, Srd));
+								ir.zero_extend(Reg32(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Load { memarg } => {
+								ir.pop(Reg(Srd));
+								ir.r#move(Reg(Sra), Memory64(memarg.offset as i32, Srd));
+								ir.push(Reg(Sra));
 							},
 							Op::I32Load8U { memarg } => {
 								ir.pop(Reg(Srd));
-								ir.mov(Reg8(Sra), Memory8(memarg.offset as i32, Srd));
+								ir.r#move(Reg8(Sra), Memory8(memarg.offset as i32, Srd));
 								ir.zero_extend(Reg8(Sra));
 								ir.push(Reg(Sra));
 							}
+							Op::I32Load8S { memarg } => {
+								ir.pop(Reg(Srd));
+								ir.r#move(Reg8(Sra), Memory8(memarg.offset as i32, Srd));
+								ir.sign_extend(Reg8(Sra));
+								ir.push(Reg(Sra));
+							}
+							Op::I32Load16S { memarg } => {
+								ir.pop(Reg(Srd));
+								ir.r#move(Reg16(Sra), Memory16(memarg.offset as i32, Srd));
+								ir.sign_extend(Reg16(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I32Load16U { memarg } => {
+								ir.pop(Reg(Srd));
+								ir.r#move(Reg16(Sra), Memory16(memarg.offset as i32, Srd));
+								ir.zero_extend(Reg16(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Load8S { memarg } => {
+								ir.pop(Reg(Srd));
+								ir.r#move(Reg8(Sra), Memory8(memarg.offset as i32, Srd));
+								ir.sign_extend(Reg8(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Load8U { memarg } => {
+								ir.pop(Reg(Srd));
+								ir.r#move(Reg8(Sra), Memory8(memarg.offset as i32, Srd));
+								ir.zero_extend(Reg8(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Load16S { memarg } => {
+								ir.pop(Reg(Srd));
+								ir.r#move(Reg16(Sra), Memory16(memarg.offset as i32, Srd));
+								ir.sign_extend(Reg16(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Load16U { memarg } => {
+								ir.pop(Reg(Srd));
+								ir.r#move(Reg16(Sra), Memory16(memarg.offset as i32, Srd));
+								ir.zero_extend(Reg16(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Load32S { memarg } => {
+								ir.pop(Reg(Srd));
+								ir.r#move(Reg32(Sra), Memory32(memarg.offset as i32, Srd));
+								ir.sign_extend(Reg32(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Load32U { memarg } => {
+								ir.pop(Reg(Srd));
+								ir.r#move(Reg32(Sra), Memory32(memarg.offset as i32, Srd));
+								ir.zero_extend(Reg32(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Store { memarg } => {
+								ir.pop(Reg(Sra));
+								ir.pop(Reg(Srd));
+								ir.r#move(Memory64(memarg.offset as i32, Srd), Reg(Sra));
+							},
+							Op::I32Store8 { memarg } | Op::I64Store8 { memarg }=> {
+								ir.pop(Reg(Sra));
+								ir.pop(Reg(Srd));
+								ir.r#move(Memory8(memarg.offset as i32, Srd), Reg8(Sra));
+							},
+							Op::I32Store16 { memarg } | Op::I64Store16 { memarg }=> {
+								ir.pop(Reg(Sra));
+								ir.pop(Reg(Srd));
+								ir.r#move(Memory16(memarg.offset as i32, Srd), Reg16(Sra));
+							},
+							Op::I32Store { memarg } | Op::I64Store32 { memarg }=> {
+								ir.pop(Reg(Sra));
+								ir.pop(Reg(Srd));
+								ir.r#move(Memory32(memarg.offset as i32, Srd), Reg32(Sra));
+							},
+							Op::Unreachable => todo!(),
+							Op::Nop => todo!(),
+							Op::If { blockty } => todo!(),
+							Op::Else => todo!(),
+							Op::BrTable { targets } => todo!(),
+							Op::Return => todo!(),
+							Op::CallIndirect { type_index, table_index, table_byte } => todo!(),
+							Op::Drop => todo!(),
+							Op::Select => todo!(),
+							Op::MemorySize { mem, mem_byte } => todo!(),
+							Op::MemoryGrow { mem, mem_byte } => todo!(),
+							Op::I32Clz => todo!(),
+							Op::I32Ctz => todo!(),
+							Op::I32Popcnt => todo!(),
+							Op::I32Mul => todo!(),
+							Op::I32DivS => todo!(),
+							Op::I32DivU => todo!(),
+							Op::I32RemS => todo!(),
+							Op::I32RemU => todo!(),
+							Op::I32Shl => todo!(),
+							Op::I32ShrS => todo!(),
+							Op::I32ShrU => todo!(),
+							Op::I32Rotl => todo!(),
+							Op::I32Rotr => todo!(),
+							Op::I64Clz => todo!(),
+							Op::I64Ctz => todo!(),
+							Op::I64Popcnt => todo!(),
+							Op::I64Mul => todo!(),
+							Op::I64DivS => todo!(),
+							Op::I64DivU => todo!(),
+							Op::I64RemS => todo!(),
+							Op::I64RemU => todo!(),
+							Op::I64And => todo!(),
+							Op::I64Or => todo!(),
+							Op::I64Xor => todo!(),
+							Op::I64Shl => todo!(),
+							Op::I64ShrS => todo!(),
+							Op::I64ShrU => todo!(),
+							Op::I64Rotl => todo!(),
+							Op::I64Rotr => todo!(),
+							Op::I32WrapI64 => todo!(),
+							Op::I64ExtendI32S => todo!(),
+							Op::I64ExtendI32U => todo!(),
 
 							unk => todo!("opcode {:?}", unk)
 						}

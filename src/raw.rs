@@ -270,6 +270,24 @@ impl RawPvf {
 								ir.xor(Reg32(Sra), Reg32(Srd));
 								ir.push(Reg(Sra));
 							},
+							Op::I64And => {
+								ir.pop(Reg(Sra));
+								ir.pop(Reg(Srd));
+								ir.and(Reg(Sra), Reg(Srd));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Or => {
+								ir.pop(Reg(Sra));
+								ir.pop(Reg(Srd));
+								ir.or(Reg(Sra), Reg(Srd));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Xor => {
+								ir.pop(Reg(Sra));
+								ir.pop(Reg(Srd));
+								ir.xor(Reg(Sra), Reg(Srd));
+								ir.push(Reg(Sra));
+							},
 							Op::Block { blockty } => {
 								self.block_index += 1;
 								let has_retval = match blockty {
@@ -497,9 +515,21 @@ impl RawPvf {
 							},
 							Op::MemorySize { mem, mem_byte } => todo!(),
 							Op::MemoryGrow { mem, mem_byte } => todo!(),
-							Op::I32Clz => todo!(),
-							Op::I32Ctz => todo!(),
-							Op::I32Popcnt => todo!(),
+							Op::I32Clz => {
+								ir.pop(Reg(Sra));
+								ir.leading_zeroes(Reg32(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I32Ctz => {
+								ir.pop(Reg(Sra));
+								ir.trailing_zeroes(Reg32(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I32Popcnt => {
+								ir.pop(Reg(Sra));
+								ir.bit_population_count(Reg32(Sra));
+								ir.push(Reg(Sra));
+							},
 							Op::I32Mul => todo!(),
 							Op::I32DivS => todo!(),
 							Op::I32DivU => todo!(),
@@ -510,26 +540,41 @@ impl RawPvf {
 							Op::I32ShrU => todo!(),
 							Op::I32Rotl => todo!(),
 							Op::I32Rotr => todo!(),
-							Op::I64Clz => todo!(),
-							Op::I64Ctz => todo!(),
-							Op::I64Popcnt => todo!(),
+							Op::I64Clz => {
+								ir.pop(Reg(Sra));
+								ir.leading_zeroes(Reg(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Ctz => {
+								ir.pop(Reg(Sra));
+								ir.trailing_zeroes(Reg(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I64Popcnt => {
+								ir.pop(Reg(Sra));
+								ir.bit_population_count(Reg(Sra));
+								ir.push(Reg(Sra));
+							},
 							Op::I64Mul => todo!(),
 							Op::I64DivS => todo!(),
 							Op::I64DivU => todo!(),
 							Op::I64RemS => todo!(),
 							Op::I64RemU => todo!(),
-							Op::I64And => todo!(),
-							Op::I64Or => todo!(),
-							Op::I64Xor => todo!(),
 							Op::I64Shl => todo!(),
 							Op::I64ShrS => todo!(),
 							Op::I64ShrU => todo!(),
 							Op::I64Rotl => todo!(),
 							Op::I64Rotr => todo!(),
-							Op::I32WrapI64 => todo!(),
-							Op::I64ExtendI32S => todo!(),
-							Op::I64ExtendI32U => todo!(),
-
+							Op::I32WrapI64 | Op::I64ExtendI32U => {
+								ir.pop(Reg(Sra));
+								ir.zero_extend(Reg32(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::I64ExtendI32S => {
+								ir.pop(Reg(Sra));
+								ir.sign_extend(Reg32(Sra));
+								ir.push(Reg(Sra));
+							},
 							unk => todo!("opcode {:?}", unk)
 						}
 					}

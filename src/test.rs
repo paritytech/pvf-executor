@@ -46,6 +46,7 @@ fn i32_const() {
 	assert_eq!(test::<_, i32>(wat(r#"(module (func (export "test") (result i32) i32.const 42))"#), ()), 42);
 	assert_eq!(test::<_, i32>(wat(r#"(module (func (export "test") (result i32) i32.const -42))"#), ()), -42);
 	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) i32.const -42))"#), ()), 4294967254);
+	assert_eq!(test::<_, i32>(wat(r#"(module (func (export "test") (result i32) (i32.const 42) (i32.const 41) (drop)))"#), ()), 42);
 }
 
 #[test]
@@ -53,6 +54,7 @@ fn i64_const() {
 	assert_eq!(test::<_, i64>(wat(r#"(module (func (export "test") (result i64) i64.const 42))"#), ()), 42);
 	assert_eq!(test::<_, i64>(wat(r#"(module (func (export "test") (result i64) i64.const -42))"#), ()), -42);
 	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) i64.const -42))"#), ()), 18446744073709551574);
+	assert_eq!(test::<_, i64>(wat(r#"(module (func (export "test") (result i64) (i64.const 42) (i64.const 41) (drop)))"#), ()), 42);
 }
 
 #[test]
@@ -60,6 +62,37 @@ fn i32_bitwise() {
 	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.and (i32.const 298) (i32.const 63))))"#), ()), 42);
 	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.or (i32.const 40) (i32.const 2))))"#), ()), 42);
 	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.xor (i32.const 127) (i32.const 85))))"#), ()), 42);
+
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.clz (i32.const 0x00080000))))"#), ()), 12);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.clz (i32.const 0))))"#), ()), 32);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.clz (i32.const 0x80000000))))"#), ()), 0);
+
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.ctz (i32.const 0x00001000))))"#), ()), 12);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.ctz (i32.const 0))))"#), ()), 32);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.ctz (i32.const 1))))"#), ()), 0);
+
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.popcnt (i32.const 0xAAAAAAAA))))"#), ()), 16);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.popcnt (i32.const -1))))"#), ()), 32);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.popcnt (i32.const 0))))"#), ()), 0);
+}
+
+#[test]
+fn i64_bitwise() {
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.and (i64.const 0xF2F2F2F2F2F2F2F2) (i64.const 0x4F4F4F4F4F4F4F4F))))"#), ()), 0x4242424242424242);
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.or  (i64.const 0x4040404040404040) (i64.const 0x0202020202020202))))"#), ()), 0x4242424242424242);
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.xor (i64.const 0xAAAAAAAAAAAAAAAA) (i64.const 0xE8E8E8E8E8E8E8E8))))"#), ()), 0x4242424242424242);
+
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.clz (i64.const 0x0000000000200000))))"#), ()), 42);
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.clz (i64.const 0))))"#), ()), 64);
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.clz (i64.const 0x8000000000000000))))"#), ()), 0);
+
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.ctz (i64.const 0x0000040000000000))))"#), ()), 42);
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.ctz (i64.const 0))))"#), ()), 64);
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.ctz (i64.const 1))))"#), ()), 0);
+
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.popcnt (i64.const 0xAAAAAAAAAAAAAAAA))))"#), ()), 32);
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.popcnt (i64.const -1))))"#), ()), 64);
+	assert_eq!(test::<_, u64>(wat(r#"(module (func (export "test") (result i64) (i64.popcnt (i64.const 0))))"#), ()), 0);
 }
 
 #[test]
@@ -451,4 +484,13 @@ fn import_func() {
 fn select() {
 	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (select (i32.const 10) (i32.const 42) (i32.const 0))))"#), ()), 42);
 	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (select (i32.const 42) (i32.const 10) (i32.const 1))))"#), ()), 42);
+}
+
+#[test]
+fn i32_i64_conv() {
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (i32.wrap_i64 (i64.const 0x44332211DDCCBBAA))))"#), ()), 0xDDCCBBAA);
+	assert_eq!(test::<_, i64>(wat(r#"(module (func (export "test") (result i64) (i64.extend_i32_u (i32.const 42))))"#), ()), 42);
+	assert_eq!(test::<_, i64>(wat(r#"(module (func (export "test") (result i64) (i64.extend_i32_u (i32.const -42))))"#), ()), 0xFFFFFFD6);
+	assert_eq!(test::<_, i64>(wat(r#"(module (func (export "test") (result i64) (i64.extend_i32_s (i32.const 42))))"#), ()), 42);
+	assert_eq!(test::<_, i64>(wat(r#"(module (func (export "test") (result i64) (i64.extend_i32_s (i32.const -42))))"#), ()), -42);
 }

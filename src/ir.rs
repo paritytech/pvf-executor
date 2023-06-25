@@ -45,6 +45,9 @@ pub enum IrCp {
     And(IrOperand, IrOperand),
     Or(IrOperand, IrOperand),
     Xor(IrOperand, IrOperand),
+    LeadingZeroes(IrOperand),
+    TrailingZeroes(IrOperand),
+    BitPopulationCount(IrOperand),
     Jump(IrLabel),
     JumpIf(IrCond, IrLabel),
     Call(IrLabel),
@@ -155,6 +158,18 @@ impl Ir {
 
     pub fn xor(&mut self, dest: IrOperand, src: IrOperand) {
         self.0.push(IrCp::Xor(dest, src));
+    }
+
+    pub fn leading_zeroes(&mut self, src: IrOperand) {
+        self.0.push(IrCp::LeadingZeroes(src));
+    }
+
+    pub fn trailing_zeroes(&mut self, src: IrOperand) {
+        self.0.push(IrCp::TrailingZeroes(src));
+    }
+
+    pub fn bit_population_count(&mut self, src: IrOperand) {
+        self.0.push(IrCp::BitPopulationCount(src));
     }
 
     pub fn jump(&mut self, target: IrLabel) {

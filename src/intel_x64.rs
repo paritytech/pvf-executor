@@ -48,6 +48,7 @@ const SIB4: u8 = 0x80;
 const SIB8: u8 = 0xc0;
 
 const OPER_SIZE_OVR: u8 = 0x66;
+const REP: u8 = 0xf3;
 
 const ABI_PARAM_REGS: [(u8, u8); 6] = [(0, DI), (0, SI), (0, DX), (0, CX), (REX_R, R8), (REX_R, R9)];
 
@@ -176,10 +177,10 @@ impl CodeGenerator for IntelX64Compiler {
 						(Reg(rdest), Imm64(imm)) => {
 							// mov <dreg>, <imm64>
 							if *imm > 0 && *imm < u32::MAX as i64 {
-								emit!(0xb8 | native_reg(rdest));
+								emit!(0xb8 | native_reg(rdest)); // movabs <rdest32>, <imm32>
 								code.emit_imm32_le(*imm as i32);
 							} else {
-								emit!(REX_W, 0xb8 | native_reg(rdest));
+								emit!(REX_W, 0xb8 | native_reg(rdest)); // movabs <rdest>, <imm64> 
 								code.emit_imm64_le(*imm);
 							}
 						},
@@ -251,7 +252,7 @@ impl CodeGenerator for IntelX64Compiler {
 					match src {
 						Reg8(rsrc) => emit!(0x0f, 0xb6, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movzx <rsrc32>, <rsrc8>
 						Reg16(rsrc) => emit!(0x0f, 0xb7, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movzx <rsrc32>, <rsrc16>
-						Reg32(_) => (),
+						Reg32(rsrc) => emit!(0x89, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // mov <rsrc32>, <rsrc32> ; This zero-extends to 64 bits
 						_ => unreachable!(),
 					}
 				},
@@ -454,6 +455,39 @@ impl CodeGenerator for IntelX64Compiler {
 							emit!(REX_W, 0x0f, 0x45, MOD_REG | native_reg(result_reg) << 3 | native_reg(if_not_zero_reg)); // cmovne <rres>, <rifnz>
 						},
 						_ => unreachable!()
+					}
+				}
+				LeadingZeroes(src) => {
+					match src {
+						Reg32(rsrc) => {
+							emit!(REP, 0x0f, 0xbd, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // lzcnt <rsrc32>, <rsrc32> ;; (encoded as rep bsr)
+						},
+						Reg(rsrc) => {
+							emit!(REP, REX_W, 0x0f, 0xbd, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // lzcnt <rsrc>, <rsrc>
+						},
+						_ => unreachable!()
+					}
+				},
+				TrailingZeroes(src) => {
+					match src {
+						Reg32(rsrc) => {
+							emit!(REP, 0x0f, 0xbc, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // tzcnt <rsrc32>, <rsrc32> ;; (encoded as rep bsf)
+						},
+						Reg(rsrc) => {
+							emit!(REP, REX_W, 0x0f, 0xbc, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // tzcnt <rsrc>, <rsrc>
+						},
+						_ => unreachable!()
+					}
+				}
+				BitPopulationCount(src) => {
+					match src {
+						Reg32(rsrc) => {
+							emit!(REP, 0x0f, 0xb8, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // popcnt <rsrc32>, <rsrc32>
+						},
+						Reg(rsrc) => {
+							emit!(REP, REX_W, 0x0f, 0xb8, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // popcnt <rsrc32>, <rsrc32>
+						},
+						_ => unreachable!(),
 					}
 				}
 			}

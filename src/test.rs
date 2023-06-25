@@ -231,13 +231,8 @@ fn block() {
 					i32.const 3
 					local.set 2
 					(loop (result i32)
-						i32.const 10
-						local.get 1
-						i32.add
-						local.set 1
-						i32.const 1
-						local.get 2
-						i32.sub
+						(local.set 1 (i32.add (local.get 1) (i32.const 10)))
+						(i32.sub (i32.const 1) (local.get 2))
 						local.tee 2
 						br_if 0
 						local.get 1
@@ -258,10 +253,8 @@ fn locals() {
 		test::<_, i32>(wat(r#"
 			(module
 				(func (export "test") (result i32) (local i32)
-					i32.const 21
-					local.tee 0
-					local.get 0
-					i32.add
+					(local.tee 0 (i32.const 21))
+					(i32.add (local.get 0))
 				)
 			)"#),
 			()
@@ -276,11 +269,9 @@ fn globals() {
 		test::<_, i32>(wat(r#"
 			(module
 				(func (export "test") (result i32)
-					i32.const 12
-					global.set 1
-					global.get 0
-					global.get 1
-					i32.add
+					
+					(global.set 1 (i32.const 12))
+					(i32.add (global.get 1) (global.get 0))
 				)
 				(global i32 (i32.const 30))
 				(global i32 (i32.const 0))
@@ -454,4 +445,10 @@ fn import_func() {
 		),
 		42
 	);
+}
+
+#[test]
+fn select() {
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (select (i32.const 10) (i32.const 42) (i32.const 0))))"#), ()), 42);
+	assert_eq!(test::<_, u32>(wat(r#"(module (func (export "test") (result i32) (select (i32.const 42) (i32.const 10) (i32.const 1))))"#), ()), 42);
 }

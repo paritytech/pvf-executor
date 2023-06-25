@@ -1,6 +1,6 @@
 use crate::{CodeGenerator, codegen::CodeEmitter, PreparedPvf};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum IrReg {
     Sra,
     Src,
@@ -39,6 +39,7 @@ pub enum IrCp {
     SignExtend(IrOperand),
     Compare(IrCond, IrOperand, IrOperand),
     CheckIfZero(IrOperand),
+    Select(IrOperand, IrOperand, IrOperand, IrOperand),
     Add(IrOperand, IrOperand),
     Sub(IrOperand, IrOperand),
     And(IrOperand, IrOperand),
@@ -47,8 +48,9 @@ pub enum IrCp {
     Jump(IrLabel),
     JumpIf(IrCond, IrLabel),
     Call(IrLabel),
+    Return,
+    Trap,
     Postamble,
-    Ret,
 }
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
@@ -139,6 +141,10 @@ impl Ir {
     	self.0.push(IrCp::CheckIfZero(op));
     }
 
+    pub fn select(&mut self, check: IrOperand, if_zero: IrOperand, if_not_zero: IrOperand, result: IrOperand) {
+    	self.0.push(IrCp::Select(check, if_zero, if_not_zero, result));
+    }
+
     pub fn and(&mut self, dest: IrOperand, src: IrOperand) {
         self.0.push(IrCp::And(dest, src));
     }
@@ -163,12 +169,16 @@ impl Ir {
         self.0.push(IrCp::Call(target));
     }
 
+    pub fn trap(&mut self) {
+        self.0.push(IrCp::Trap);
+    }
+
     pub fn postamble(&mut self) {
     	self.0.push(IrCp::Postamble);
     }
 
-    pub fn ret(&mut self) {
-    	self.0.push(IrCp::Ret);
+    pub fn r#return(&mut self) {
+    	self.0.push(IrCp::Return);
     }
 }
 

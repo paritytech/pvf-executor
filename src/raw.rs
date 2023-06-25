@@ -1,7 +1,8 @@
 use crate::{PvfError, IrPvf};
 use crate::ir::{Ir, IrLabel, IrOperand::*, IrReg::*, IrCond::*, IrSignature, IrHints};
+// use std::assert_matches::assert_matches;
 use std::collections::HashMap;
-use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType, Import, TypeRef, FuncType, OperatorsReader};
+use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType, Import, Encoding, TypeRef, FuncType, OperatorsReader};
 
 enum ControlFrameType {
 	Func,
@@ -328,7 +329,7 @@ impl RawPvf {
 											ir.pop(Reg(Bfp));
 											ir.pop(Reg(Ffp));
 											ir.postamble();
-											ir.ret();
+											ir.r#return();
 										},
 										ControlFrameType::Block | ControlFrameType::Loop => {
 											if frame.has_retval {
@@ -469,14 +470,31 @@ impl RawPvf {
 								ir.r#move(Memory32(memarg.offset as i32, Srd), Reg32(Sra));
 							},
 							Op::Unreachable => todo!(),
-							Op::Nop => todo!(),
+							Op::Nop => (),
 							Op::If { blockty } => todo!(),
 							Op::Else => todo!(),
 							Op::BrTable { targets } => todo!(),
-							Op::Return => todo!(),
+							Op::Return => {
+								if ftype.results().len() > 0 {
+									ir.pop(Reg(Sra));
+								}
+								ir.r#move(Reg(Stp), Reg(Ffp));
+								ir.pop(Reg(Bfp));
+								ir.pop(Reg(Ffp));
+								ir.postamble();
+								ir.r#return();
+							},
 							Op::CallIndirect { type_index, table_index, table_byte } => todo!(),
-							Op::Drop => todo!(),
-							Op::Select => todo!(),
+							Op::Drop => {
+								ir.pop(Reg(Sra));
+							},
+							Op::Select => {
+								ir.pop(Reg(Src));
+								ir.pop(Reg(Sra));
+								ir.pop(Reg(Srd));
+								ir.select(Reg32(Src), Reg(Sra), Reg(Srd), Reg(Sra));
+								ir.push(Reg(Sra));
+							},
 							Op::MemorySize { mem, mem_byte } => todo!(),
 							Op::MemoryGrow { mem, mem_byte } => todo!(),
 							Op::I32Clz => todo!(),
@@ -521,14 +539,41 @@ impl RawPvf {
 					ir_pvf.add_func(findex, ir, signature);
 					findex += 1;
 				},
-				_other => {
-					println!("STUB: Section {:?}", _other);
-				}
+				Payload::Version { num, encoding, range } => {
+					assert_eq!(num, 1);
+					if !matches!(encoding, Encoding::Module) {
+						panic!("Only modules are supported");
+					}
+				},
+				Payload::TableSection(_) => todo!(),
+				Payload::TagSection(_) => todo!(),
+				Payload::StartSection { func, range } => todo!(),
+				Payload::ElementSection(_) => todo!(),
+				Payload::DataCountSection { count, range } => todo!(),
+				Payload::DataSection(_) => todo!(),
+				Payload::CodeSectionStart { count, range, size } => (), // FIXME
+				Payload::ModuleSection { parser, range } => todo!(),
+				Payload::InstanceSection(_) => todo!(),
+				Payload::CoreTypeSection(_) => todo!(),
+				Payload::ComponentSection { parser, range } => todo!(),
+				Payload::ComponentInstanceSection(_) => todo!(),
+				Payload::ComponentAliasSection(_) => todo!(),
+				Payload::ComponentTypeSection(_) => todo!(),
+				Payload::ComponentCanonicalSection(_) => todo!(),
+				Payload::ComponentStartSection { start, range } => todo!(),
+				Payload::ComponentImportSection(_) => todo!(),
+				Payload::ComponentExportSection(_) => todo!(),
+				Payload::CustomSection(_) => (),
+				Payload::UnknownSection { id, contents, range } => todo!(),
+				Payload::End(_) => (), // FIXME
+				// _other => {
+				// 	println!("STUB: Section {:?}", _other);
+				// }
 			}
 		}
 
 		init_ir.postamble();
-		init_ir.ret();
+		init_ir.r#return();
 		ir_pvf.add_func(findex, init_ir, IrSignature { params: 0, results: 0 });
 
 		println!("IR: {:?}", ir_pvf);

@@ -438,11 +438,24 @@ impl CodeGenerator for IntelX64Compiler {
 					emit!(REX_W | REX_R | REX_B, 0x8b, MOD_DISP32 | R15 << 3 | R15); // mov r15, [r15+<offset>]
 					code.emit_imm32_le(temp_storage_off + 15 * 8);
 				}
-				Ret => {
-					// emit!(REX_B, 0x58 | R15); // pop r15
+				Return => {
 					emit!(0xc3); // ret near
 				}
-				// _ => todo!(),
+				Trap => {
+					emit!(0x0f, 0x0b); // ud2
+				}
+				Select(check, if_zero, if_not_zero, result) => {
+					match (check, if_zero, if_not_zero, result) {
+						(Reg32(check_reg), Reg(if_zero_reg), Reg(if_not_zero_reg), Reg(result_reg)) => {
+							if result_reg != if_zero_reg {
+								emit!(REX_W, 0x89, MOD_REG | native_reg(if_zero_reg) << 3 | native_reg(result_reg)); // mov <rres>, <rifz>
+							}
+							emit!(0x85, MOD_REG | native_reg(check_reg) << 3 | native_reg(check_reg)); // test <rcheck>, <rcheck>
+							emit!(REX_W, 0x0f, 0x45, MOD_REG | native_reg(result_reg) << 3 | native_reg(if_not_zero_reg)); // cmovne <rres>, <rifnz>
+						},
+						_ => unreachable!()
+					}
+				}
 			}
 		}
 

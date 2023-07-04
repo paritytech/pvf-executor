@@ -1,12 +1,36 @@
 use crate::{CodeGenerator, codegen::{CodeEmitter, Relocation}, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*, IrCond, IrCond::*, IrLabel, IrSignature}};
 
+// Memory segment map
+//
+// Table start is aligned to page size
+//                 +-------------------+
+//                 | TableN            |
+//                ~~~~~~~~~~~~~~~~~~~~~~~
+//                 +-------------------+
+//                 | Table1            |
+//                 +-------------------+
+//                 | Table0            |
+//        -0x20000 +-------------------+
+//                 | Transient VM data |
+//        -0x10000 +-------------------+
+//                 | Globals           |
+// base pointer -> +-------------------+
+//                 | Volatile memory   |
+//                 +-------------------+
+
 pub struct IntelX64Compiler {
 	call_targets: Vec<CallTarget>,
+	table_map: Vec<isize>,
 }
 
 impl IntelX64Compiler {
-	pub fn new() -> Self {
-		Self { call_targets: Vec::new() }
+	pub fn new(tables: &Vec<u32>) -> Self {
+		let mut table_map = Vec::new();
+		for table_size in tables {
+			let table_pages = 1 + table_size * 8 / 0x10000;
+			table_map.push(-0x20000isize - table_pages as isize * 0x10000)
+		}
+		Self { call_targets: Vec::new(), table_map }
 	}
 }
 
@@ -488,6 +512,14 @@ impl CodeGenerator for IntelX64Compiler {
 							emit!(REP, REX_W, 0x0f, 0xb8, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // popcnt <rsrc32>, <rsrc32>
 						},
 						_ => unreachable!(),
+					}
+				},
+				InitTablePreamble(offset) => {
+					match offset {
+						Reg32(offset_reg) => {
+							emit!(0xfc); // cld
+
+						}
 					}
 				}
 			}

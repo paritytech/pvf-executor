@@ -6,6 +6,7 @@ pub struct PreparedPvf {
 	pub(crate) labels: HashMap<IrLabel, usize>,
 	pub(crate) relocs: Vec<(Relocation, usize)>,
 	pub(crate) memory: (u32, u32),
+	pub(crate) tables_pages: u32,
 }
 
 impl PreparedPvf {

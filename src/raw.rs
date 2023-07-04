@@ -2,7 +2,7 @@ use crate::{PvfError, IrPvf};
 use crate::ir::{Ir, IrLabel, IrOperand::*, IrReg::*, IrCond::*, IrSignature, IrHints};
 // use std::assert_matches::assert_matches;
 use std::collections::HashMap;
-use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType, Import, Encoding, TypeRef, FuncType, OperatorsReader};
+use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType, Import, Encoding, TypeRef, TableInit, FuncType, OperatorsReader, ElementKind, ElementItems};
 
 enum ControlFrameType {
 	Func,
@@ -171,6 +171,39 @@ impl RawPvf {
 						};
 					}
 
+					macro_rules! impl_unary {
+						($reg:ident, $src:expr, $op:ident) => {
+							{
+								ir.pop(Reg($src));
+								ir.$op($reg($src));
+								ir.push(Reg($src));
+							}
+						};
+					}
+
+					// Commutative ops are better optimized if their arguments are changed places
+					macro_rules! impl_comm_binary {
+						($reg:ident, $dest:expr, $src:expr, $op:ident) => {
+							{
+								ir.pop(Reg($dest));
+								ir.pop(Reg($src));
+								ir.$op($reg($dest), $reg($src));
+								ir.push(Reg($dest));
+							}
+						};
+					}
+
+					macro_rules! impl_noncomm_binary {
+						($reg:ident, $dest:expr, $src:expr, $op:ident) => {
+							{
+								ir.pop(Reg($src));
+								ir.pop(Reg($dest));
+								ir.$op($reg($dest), $reg($src));
+								ir.push(Reg($dest));
+							}
+						};
+					}
+
 					cstack.push(ControlFrame { cftype: ControlFrameType::Func, block_index: 0, has_retval: ftype.results().len() > 0 });
 
 					ir.label(
@@ -198,30 +231,10 @@ impl RawPvf {
 								ir.r#move(Reg(Sra), Imm64(v));
 								ir.push(Reg(Sra));
 							}
-							Op::I32Add => {
-								ir.pop(Reg(Sra));
-								ir.pop(Reg(Srd));
-								ir.add(Reg32(Sra), Reg32(Srd));
-								ir.push(Reg(Sra));
-							},
-							Op::I64Add => {
-								ir.pop(Reg(Sra));
-								ir.pop(Reg(Srd));
-								ir.add(Reg(Sra), Reg(Srd));
-								ir.push(Reg(Sra));
-							},
-							Op::I32Sub => {
-								ir.pop(Reg(Srd));
-								ir.pop(Reg(Sra));
-								ir.sub(Reg32(Sra), Reg32(Srd));
-								ir.push(Reg(Sra));
-							},
-							Op::I64Sub => {
-								ir.pop(Reg(Srd));
-								ir.pop(Reg(Sra));
-								ir.sub(Reg(Sra), Reg(Srd));
-								ir.push(Reg(Sra));
-							},
+							Op::I32Add => impl_comm_binary!(Reg32, Sra, Srd, add),
+							Op::I64Add => impl_comm_binary!(Reg, Sra, Srd, add),
+							Op::I32Sub => impl_noncomm_binary!(Reg32, Sra, Srd, sub),
+							Op::I64Sub => impl_noncomm_binary!(Reg, Sra, Srd, sub),
 							Op::I32Eq =>  impl_compare!(Equal, Reg32, Sra, Srd),
 							Op::I32Ne =>  impl_compare!(NotEqual, Reg32, Sra, Srd),
 							Op::I32LtS => impl_compare!(LessSigned, Reg32, Sra, Srd),
@@ -242,52 +255,14 @@ impl RawPvf {
 							Op::I64LeU => impl_compare!(LessOrEqualUnsigned, Reg, Sra, Srd),
 							Op::I64GeS => impl_compare!(GreaterOrEqualSigned, Reg, Sra, Srd),
 							Op::I64GeU => impl_compare!(GreaterOrEqualUnsigned, Reg, Sra, Srd),
-							Op::I32Eqz => {
-								ir.pop(Reg(Sra));
-								ir.check_if_zero(Reg32(Sra));
-								ir.push(Reg(Sra));
-							},
-							Op::I64Eqz => {
-								ir.pop(Reg(Sra));
-								ir.check_if_zero(Reg(Sra));
-								ir.push(Reg(Sra));
-							},
-							Op::I32And => {
-								ir.pop(Reg(Sra));
-								ir.pop(Reg(Srd));
-								ir.and(Reg32(Sra), Reg32(Srd));
-								ir.push(Reg(Sra));
-							},
-							Op::I32Or => {
-								ir.pop(Reg(Sra));
-								ir.pop(Reg(Srd));
-								ir.or(Reg32(Sra), Reg32(Srd));
-								ir.push(Reg(Sra));
-							},
-							Op::I32Xor => {
-								ir.pop(Reg(Sra));
-								ir.pop(Reg(Srd));
-								ir.xor(Reg32(Sra), Reg32(Srd));
-								ir.push(Reg(Sra));
-							},
-							Op::I64And => {
-								ir.pop(Reg(Sra));
-								ir.pop(Reg(Srd));
-								ir.and(Reg(Sra), Reg(Srd));
-								ir.push(Reg(Sra));
-							},
-							Op::I64Or => {
-								ir.pop(Reg(Sra));
-								ir.pop(Reg(Srd));
-								ir.or(Reg(Sra), Reg(Srd));
-								ir.push(Reg(Sra));
-							},
-							Op::I64Xor => {
-								ir.pop(Reg(Sra));
-								ir.pop(Reg(Srd));
-								ir.xor(Reg(Sra), Reg(Srd));
-								ir.push(Reg(Sra));
-							},
+							Op::I32Eqz => impl_unary!(Reg32, Sra, check_if_zero),
+							Op::I64Eqz => impl_unary!(Reg, Sra, check_if_zero),
+							Op::I32And => impl_comm_binary!(Reg32, Sra, Srd, and),
+							Op::I32Or => impl_comm_binary!(Reg32, Sra, Srd, or),
+							Op::I32Xor => impl_comm_binary!(Reg32, Sra, Srd, xor),
+							Op::I64And => impl_comm_binary!(Reg, Sra, Srd, and),
+							Op::I64Or => impl_comm_binary!(Reg, Sra, Srd, or),
+							Op::I64Xor => impl_comm_binary!(Reg, Sra, Srd, xor),
 							Op::Block { blockty } => {
 								self.block_index += 1;
 								let has_retval = match blockty {
@@ -515,21 +490,9 @@ impl RawPvf {
 							},
 							Op::MemorySize { mem, mem_byte } => todo!(),
 							Op::MemoryGrow { mem, mem_byte } => todo!(),
-							Op::I32Clz => {
-								ir.pop(Reg(Sra));
-								ir.leading_zeroes(Reg32(Sra));
-								ir.push(Reg(Sra));
-							},
-							Op::I32Ctz => {
-								ir.pop(Reg(Sra));
-								ir.trailing_zeroes(Reg32(Sra));
-								ir.push(Reg(Sra));
-							},
-							Op::I32Popcnt => {
-								ir.pop(Reg(Sra));
-								ir.bit_population_count(Reg32(Sra));
-								ir.push(Reg(Sra));
-							},
+							Op::I32Clz => impl_unary!(Reg32, Sra, leading_zeroes),
+							Op::I32Ctz => impl_unary!(Reg32, Sra, trailing_zeroes),
+							Op::I32Popcnt => impl_unary!(Reg32, Sra, bit_population_count),
 							Op::I32Mul => todo!(),
 							Op::I32DivS => todo!(),
 							Op::I32DivU => todo!(),
@@ -540,21 +503,9 @@ impl RawPvf {
 							Op::I32ShrU => todo!(),
 							Op::I32Rotl => todo!(),
 							Op::I32Rotr => todo!(),
-							Op::I64Clz => {
-								ir.pop(Reg(Sra));
-								ir.leading_zeroes(Reg(Sra));
-								ir.push(Reg(Sra));
-							},
-							Op::I64Ctz => {
-								ir.pop(Reg(Sra));
-								ir.trailing_zeroes(Reg(Sra));
-								ir.push(Reg(Sra));
-							},
-							Op::I64Popcnt => {
-								ir.pop(Reg(Sra));
-								ir.bit_population_count(Reg(Sra));
-								ir.push(Reg(Sra));
-							},
+							Op::I64Clz => impl_unary!(Reg, Sra, leading_zeroes),
+							Op::I64Ctz => impl_unary!(Reg, Sra, trailing_zeroes),
+							Op::I64Popcnt => impl_unary!(Reg, Sra, bit_population_count),
 							Op::I64Mul => todo!(),
 							Op::I64DivS => todo!(),
 							Op::I64DivU => todo!(),
@@ -590,10 +541,40 @@ impl RawPvf {
 						panic!("Only modules are supported");
 					}
 				},
-				Payload::TableSection(_) => todo!(),
+				Payload::TableSection(reader) => {
+					for table in reader.into_iter() {
+						let table = table.unwrap();
+						if !matches!(table.init, TableInit::RefNull) {
+							todo!("Table initialization mode {:?}", table.init);
+						}
+						let table_size = if let Some(maximum) = table.ty.maximum { maximum } else { table.ty.initial };
+						ir_pvf.add_table(table_size);
+					}
+				},
 				Payload::TagSection(_) => todo!(),
 				Payload::StartSection { func, range } => todo!(),
-				Payload::ElementSection(_) => todo!(),
+				Payload::ElementSection(reader) => {
+					for element in reader.into_iter() {
+						let element = element.unwrap();
+						if let ElementKind::Active { table_index, offset_expr } = element.kind {
+							let mut init_offset_ir = parse_const_expr(offset_expr.get_operators_reader(), &globals)?;
+							init_ir.append(&mut init_offset_ir);
+							init_ir.pop(Reg(Sra));
+							init_ir.init_table_preamble(Reg32(Sra));
+							if let ElementItems::Functions(reader) = element.items {
+								for function_index in reader.into_iter() {
+									let function_index = function_index.unwrap();
+									init_ir.init_table_element(Imm32(function_index as i32));
+								}
+							} else {
+								todo!("Element items are not functions");
+							}
+							init_ir.init_table_postamble();
+						} else {
+							todo!("Element kind is not active");
+						}
+					}
+				},
 				Payload::DataCountSection { count, range } => todo!(),
 				Payload::DataSection(_) => todo!(),
 				Payload::CodeSectionStart { count, range, size } => (), // FIXME

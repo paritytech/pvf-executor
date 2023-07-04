@@ -20,7 +20,6 @@ pub enum IrOperand {
 	Memory16(i32, IrReg),
 	Memory32(i32, IrReg),
 	Memory64(i32, IrReg),
-	// MemIndirect(IrReg, IrReg, u8, u32),
 	Imm32(i32),
 	Imm64(i64),
     Local(u32),
@@ -32,6 +31,9 @@ pub enum IrCp {
     Label(IrLabel),
     Preamble,
     InitLocals(u32),
+    InitTablePreamble(IrOperand),
+    InitTableElement(IrOperand),
+    InitTablePostamble,
     Push(IrOperand),
     Pop(IrOperand),
     Move(IrOperand, IrOperand),
@@ -106,6 +108,18 @@ impl Ir {
 
     pub fn init_locals(&mut self, n_locals: u32) {
         self.0.push(IrCp::InitLocals(n_locals));
+    }
+
+    pub fn init_table_preamble(&mut self, offset_reg: IrOperand) {
+        self.0.push(IrCp::InitTablePreamble(offset_reg));
+    }
+
+    pub fn init_table_element(&mut self, element: IrOperand) {
+        self.0.push(IrCp::InitTableElement(element));
+    }
+
+    pub fn init_table_postamble(&mut self) {
+        self.0.push(IrCp::InitTablePostamble);
     }
 
     pub fn push(&mut self, src: IrOperand) {
@@ -203,6 +217,12 @@ enum IrFunc {
 	Function(Ir),
 }
 
+#[derive(Debug, Clone)]
+enum IrTable {
+    Import(*const u8),
+    Table(u32),
+}
+
 #[derive(Debug)]
 pub struct IrPvf {
 	hints: IrHints,
@@ -210,6 +230,7 @@ pub struct IrPvf {
     // init_index: usize,
     signatures: Vec<Option<IrSignature>>,
     memory: (u32, u32),
+    tables: Vec<IrTable>,
 }
 
 impl std::fmt::Debug for Ir {
@@ -237,7 +258,7 @@ pub struct IrHints {
 
 impl IrPvf {
     pub(crate) fn new() -> Self {
-        Self { hints: IrHints::default(), funcs: Vec::new(), signatures: Vec::new(), memory: (0, 0),  }
+        Self { hints: IrHints::default(), funcs: Vec::new(), signatures: Vec::new(), memory: (0, 0), tables: Vec::new() }
     }
 
     fn ensure_func_vec_size(&mut self, index: u32) {
@@ -257,6 +278,12 @@ impl IrPvf {
     	self.ensure_func_vec_size(index);
         self.funcs[index as usize] = Some(IrFunc::Import(addr));
         self.signatures[index as usize] = Some(signature);
+    }
+
+    pub(crate) fn add_table(&mut self, max_size: u32) {
+        // TODO: Imported tables are not supported yet
+        // TODO: Adding tables in random order is not supported
+        self.tables.push(IrTable::Table(max_size));
     }
 
     pub(crate) fn set_memory(&mut self, min: u32, max: u32) {

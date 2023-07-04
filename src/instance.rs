@@ -57,7 +57,7 @@ pub struct PvfInstance {
 
 impl PvfInstance {
 	pub fn instantiate(pvf: &PreparedPvf) -> Self {
-		let mut memsize = 2;
+		let mut memsize = 2 + pvf.tables_pages;
 
 		if pvf.memory.0 > 0 {
 			memsize += pvf.memory.1;

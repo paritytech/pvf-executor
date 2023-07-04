@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::ir::{Ir, IrLabel, IrSignature};
+use crate::ir::{Ir, IrLabel, IrSignature, IrTable};
 
 pub enum Relocation {
 	MemoryAbsolute64,
@@ -53,12 +53,19 @@ impl CodeEmitter {
 	}
 }
 
-// fn resolve_func_label(findex: u32) -> IrLabel {
-
-// }
-
 pub trait CodeGenerator {
+	fn build_offset_map(&self, ir_tables: &Vec<IrTable>) -> OffsetMap {
+		for table in tables {
+
+		}
+	}
 	fn compile_func(&mut self, code: &mut CodeEmitter, index: u32, body: Ir, signatures: &Vec<Option<IrSignature>>);
 	fn link(&mut self, code: &mut CodeEmitter);
 	// fn apply_relocs(&m)
+}
+
+pub struct OffsetMap {
+	globals: isize,
+	vm_data: isize,
+	tables: Vec<isize>,
 }

@@ -218,7 +218,7 @@ enum IrFunc {
 }
 
 #[derive(Debug, Clone)]
-enum IrTable {
+pub(crate) enum IrTable {
     Import(*const u8),
     Table(u32),
 }
@@ -296,16 +296,17 @@ impl IrPvf {
 
     pub fn compile(self, codegen: &mut dyn CodeGenerator) -> PreparedPvf {
         let mut code = CodeEmitter::new();
+        let offset_map = codegen.build_offset_map(&self.tables);
 
         for (func_idx, maybe_ir) in self.funcs.into_iter().enumerate() {
             if let Some(IrFunc::Function(ir)) = maybe_ir {
-                codegen.compile_func(&mut code, func_idx as u32, ir, &self.signatures);
+                codegen.compile_func(&mut code, func_idx as u32, ir, &self.signatures, &offset_map);
             }
         }
         codegen.link(&mut code);
 
         println!("CODE: {:02X?}", code.code);
 
-        PreparedPvf { code: code.code, labels: code.labels, relocs: code.relocs, memory: self.memory }
+        PreparedPvf { code: code.code, labels: code.labels, relocs: code.relocs, memory: self.memory, tables_pages: offset_map.get_tables_pages() }
     }
 }

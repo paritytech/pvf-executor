@@ -1,4 +1,4 @@
-use crate::{CodeGenerator, codegen::{CodeEmitter, Relocation}, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*, IrCond, IrCond::*, IrLabel, IrSignature}};
+use crate::{CodeGenerator, codegen::{CodeEmitter, Relocation, OffsetMap}, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*, IrCond, IrCond::*, IrLabel, IrSignature}};
 
 // Memory segment map
 //
@@ -20,17 +20,25 @@ use crate::{CodeGenerator, codegen::{CodeEmitter, Relocation}, ir::{Ir, IrReg, I
 
 pub struct IntelX64Compiler {
 	call_targets: Vec<CallTarget>,
-	table_map: Vec<isize>,
+	// table_map: Vec<isize>,
 }
 
 impl IntelX64Compiler {
-	pub fn new(tables: &Vec<u32>) -> Self {
-		let mut table_map = Vec::new();
-		for table_size in tables {
-			let table_pages = 1 + table_size * 8 / 0x10000;
-			table_map.push(-0x20000isize - table_pages as isize * 0x10000)
-		}
-		Self { call_targets: Vec::new(), table_map }
+	// pub fn new(tables: &Vec<u32>) -> Self {
+	// 	let mut table_map = Vec::new();
+	// 	for table_size in tables {
+	// 		let table_pages = 1 + table_size * 8 / 0x10000;
+	// 		table_map.push(-0x20000isize - table_pages as isize * 0x10000)
+	// 	}
+	// 	Self { call_targets: Vec::new(), table_map }
+	// }
+	pub fn new() -> Self {
+		// let mut table_map = Vec::new();
+		// for table_size in tables {
+		// 	let table_pages = 1 + table_size * 8 / 0x10000;
+		// 	table_map.push(-0x20000isize - table_pages as isize * 0x10000)
+		// }
+		Self { call_targets: Vec::new() }
 	}
 }
 
@@ -109,7 +117,7 @@ const fn ffp() -> u8 { native_reg(&Ffp) }
 struct JmpTarget(usize, IrLabel);
 
 impl CodeGenerator for IntelX64Compiler {
-	fn compile_func(&mut self, code: &mut CodeEmitter, index: u32, body: Ir, signatures: &Vec<Option<IrSignature>>) {
+	fn compile_func(&mut self, code: &mut CodeEmitter, index: u32, body: Ir, signatures: &Vec<Option<IrSignature>>, offset_map: &OffsetMap) {
 		macro_rules! emit {
 			($($e:expr),*) => { { $(code.emit($e));* } }
 		}

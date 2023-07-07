@@ -560,7 +560,7 @@ impl RawPvf {
 							let mut init_offset_ir = parse_const_expr(offset_expr.get_operators_reader(), &globals)?;
 							init_ir.append(&mut init_offset_ir);
 							init_ir.pop(Reg(Sra));
-							init_ir.init_table_preamble(Reg32(Sra));
+							init_ir.init_table_preamble(Reg(Sra));
 							if let ElementItems::Functions(reader) = element.items {
 								for function_index in reader.into_iter() {
 									let function_index = function_index.unwrap();

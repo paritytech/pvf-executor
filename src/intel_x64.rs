@@ -19,7 +19,8 @@ use crate::{CodeGenerator, codegen::{CodeEmitter, Relocation, OffsetMap}, ir::{I
 //                 +-------------------+
 
 pub struct IntelX64Compiler {
-	call_targets: Vec<CallTarget>,
+	call_targets: Vec<LinkTarget>,
+	abs_off_targets: Vec<LinkTarget>,
 	// table_map: Vec<isize>,
 }
 
@@ -38,12 +39,12 @@ impl IntelX64Compiler {
 		// 	let table_pages = 1 + table_size * 8 / 0x10000;
 		// 	table_map.push(-0x20000isize - table_pages as isize * 0x10000)
 		// }
-		Self { call_targets: Vec::new() }
+		Self { call_targets: Vec::new(), abs_off_targets: Vec::new() }
 	}
 }
 
 #[derive(Debug)]
-struct CallTarget {
+struct LinkTarget {
 	offset: usize,
 	func_index: u32,
 }
@@ -436,7 +437,7 @@ impl CodeGenerator for IntelX64Compiler {
 					match label {
 						IrLabel::AnonymousFunc(_) | IrLabel::ExportedFunc(_, _) => {
 							emit!(0xe8); // call near (no address yet)
-							self.call_targets.push(CallTarget { offset: code.pc(), func_index: findex as u32 });
+							self.call_targets.push(LinkTarget { offset: code.pc(), func_index: findex as u32 });
 							code.emit_imm32_le(0);
 						},
 						IrLabel::ImportedFunc(_, addr) => {
@@ -524,12 +525,25 @@ impl CodeGenerator for IntelX64Compiler {
 				},
 				InitTablePreamble(offset) => {
 					match offset {
-						Reg32(offset_reg) => {
+						Reg(offset_reg) => {
+							emit!(REX_W | REX_B, 0x8d, MOD_RM | DI << 3 | MOD_SIB, SIB8 | native_reg(offset_reg) << 3 | R15); // lea rdi, [r15+<roffset>*8]
 							emit!(0xfc); // cld
-
-						}
+						},
+						_ => todo!()
 					}
-				}
+				},
+				InitTableElement(func_index_op) => {
+					match func_index_op {
+						Imm32(func_index) => {
+							emit!(REX_W, 0xb8 | AX); // movabs rax, <imm64> 
+							self.abs_off_targets.push(LinkTarget { offset: code.pc(), func_index: *func_index as u32 });
+							code.reloc(Relocation::FunctionAbsoluteAddress);
+							code.emit_imm64_le(0);
+						},
+						_ => todo!()
+					}
+				},
+				InitTablePostamble => ()
 			}
 		}
 
@@ -561,10 +575,13 @@ impl CodeGenerator for IntelX64Compiler {
 		println!("TRG {:?}", self.call_targets);
 		for target in &self.call_targets {
 			let func_address = func_offsets[target.func_index as usize];
-			// assert!(func_address > 0); // FIXME! Zero is legit
 			let insn_pc = target.offset + 4;
 			let offset: isize = func_address as isize - insn_pc as isize;
 			code.patch32_le(target.offset, offset as i32);
+		}
+		for target in &self.abs_off_targets {
+			let func_address = func_offsets[target.func_index as usize];
+			code.patch64_le(target.offset, func_address as i64);
 		}
 	}
 }

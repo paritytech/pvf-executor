@@ -3,6 +3,7 @@ use crate::ir::{Ir, IrLabel, IrSignature, IrTable};
 
 pub enum Relocation {
 	MemoryAbsolute64,
+	FunctionAbsoluteAddress,
 }
 
 pub struct CodeEmitter {

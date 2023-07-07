@@ -218,7 +218,7 @@ enum IrFunc {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum IrTable {
+pub enum IrTable {
     Import(*const u8),
     Table(u32),
 }

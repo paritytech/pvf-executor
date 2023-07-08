@@ -1,6 +1,8 @@
 use crate::{CodeGenerator, codegen::CodeEmitter, PreparedPvf};
 
 #[derive(Debug, Clone, PartialEq)]
+#[derive(Eq)]
+#[derive(Hash)]
 pub enum IrReg {
     Sra,
     Src,
@@ -11,6 +13,7 @@ pub enum IrReg {
 }
 
 #[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Hash)]
 pub enum IrOperand {
 	Reg(IrReg),
 	Reg8(IrReg),
@@ -65,6 +68,7 @@ pub enum IrLabel {
     ImportedFunc(u32, *const u8),
     BranchTarget(u64),
     LocalLabel(u32),
+    Indirect(u32, IrOperand, IrSignature),
 }
 
 #[derive(Debug, Clone)]
@@ -244,6 +248,9 @@ impl std::fmt::Debug for Ir {
 }
 
 #[derive(Debug, Clone)]
+#[derive(Eq)]
+#[derive(PartialEq)]
+#[derive(Hash)]
 pub struct IrSignature {
     pub(crate) params: u32,
     pub(crate) results: u32,

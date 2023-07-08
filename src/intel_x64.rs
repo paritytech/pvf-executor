@@ -11,9 +11,9 @@ use crate::{CodeGenerator, codegen::{CodeEmitter, Relocation, OffsetMap}, ir::{I
 //                 +-------------------+
 //                 | Table0            |
 //        -0x20000 +-------------------+
-//                 | Transient VM data |
-//        -0x10000 +-------------------+
 //                 | Globals           |
+//        -0x10000 +-------------------+
+//                 | Transient VM data |
 // base pointer -> +-------------------+
 //                 | Volatile memory   |
 //                 +-------------------+
@@ -135,11 +135,10 @@ impl CodeGenerator for IntelX64Compiler {
 					code.reloc(Relocation::MemoryAbsolute64);
 					code.emit_imm64_le(0);
 
-					let temp_storage_off = -0x20000i32;
 					emit!(REX_W | REX_R, 0x89, MOD_DISP32 | R12 << 3 | AX); // mov [rax+<offset>], r12
-					code.emit_imm32_le(temp_storage_off + 12 * 8);
+					code.emit_imm32_le(offset_map.vm_data() + 12 * 8);
 					emit!(REX_W | REX_R, 0x89, MOD_DISP32 | R15 << 3 | AX); // mov [rax+<offset>], r15
-					code.emit_imm32_le(temp_storage_off + 15 * 8);
+					code.emit_imm32_le(offset_map.vm_data() + 15 * 8);
 
 					emit!(REX_W | REX_B, 0x89, MOD_REG | AX << 3 | R15); // mov r15, rax
 				}
@@ -227,12 +226,12 @@ impl CodeGenerator for IntelX64Compiler {
 							}
 						},
 						(Reg(rdest), Global(index)) => {
-							let offset = -0x10000i32 + *index as i32 * 8; // FIXME: Account tables
+							let offset = offset_map.globals() + *index as i32 * 8; // FIXME: Account tables
 							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | R15); // mov <rdest>, [r15+<offset>]
 							code.emit_imm32_le(offset);
 						},
 						(Global(index), Reg(rsrc)) => {
-							let offset = -0x10000i32 + *index as i32 * 8; // FIXME: Account tables
+							let offset = offset_map.globals() + *index as i32 * 8; // FIXME: Account tables
 							emit!(REX_W | REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | R15); // mov [r15+<offset>], <rsrc>
 							code.emit_imm32_le(offset);
 						},
@@ -373,13 +372,24 @@ impl CodeGenerator for IntelX64Compiler {
 					code.emit_imm32_le(0);
 				},
 				Call(label) => {
-					let findex = *match label {
-						IrLabel::AnonymousFunc(idx) => idx,
-						IrLabel::ExportedFunc(idx, _) => idx,
-						IrLabel::ImportedFunc(idx, _addr) => idx,
+					let (findex, signature) = match label {
+						IrLabel::AnonymousFunc(idx) | IrLabel::ExportedFunc(idx, _) | IrLabel::ImportedFunc(idx, _) => {
+							let signature = if let Some(signature) = &signatures[*idx as usize] { signature } else { unreachable!() };
+							(Some(*idx), signature) 
+						},
+						IrLabel::Indirect(_table_index, op, signature) => {
+							match op {
+								Reg32(op_reg) => {
+									let offset = offset_map.vm_data() + 0 * 8;
+									emit!(REX_W | REX_B, 0x89, MOD_DISP32 | native_reg(op_reg) << 3 | R15); // mov [r15+<offset>], <rsrc>
+									code.emit_imm32_le(offset);
+									(None, signature)
+								},
+								_ => todo!()
+							}
+						}
 						_ => unreachable!(),
-					} as usize;
-					let signature = if let Some(signature) = &signatures[findex] { signature } else { unreachable!() }; 
+					};
 					let n_params = signature.params;
 					let n_stack_params = (n_params as usize).saturating_sub(ABI_PARAM_REGS.len());
 					if n_params > 0 {
@@ -437,7 +447,7 @@ impl CodeGenerator for IntelX64Compiler {
 					match label {
 						IrLabel::AnonymousFunc(_) | IrLabel::ExportedFunc(_, _) => {
 							emit!(0xe8); // call near (no address yet)
-							self.call_targets.push(LinkTarget { offset: code.pc(), func_index: findex as u32 });
+							self.call_targets.push(LinkTarget { offset: code.pc(), func_index: findex.expect("Function is always `Some` for the given label type") as u32 });
 							code.emit_imm32_le(0);
 						},
 						IrLabel::ImportedFunc(_, addr) => {
@@ -445,6 +455,15 @@ impl CodeGenerator for IntelX64Compiler {
 							code.emit_imm64_le(*addr as i64);
 							emit!(0xff, MOD_REG | 0x2 << 3 | AX); // call rax
 						},
+						IrLabel::Indirect(table_index, _, _) => {
+							let table_offset = offset_map.table(*table_index);
+							let stored_func_index_offset = offset_map.vm_data() + 0 * 8;
+							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | AX << 3 | R15); // mov rax, [r15+<offset>]
+							code.emit_imm32_le(stored_func_index_offset);
+							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | AX << 3 | MOD_SIB, SIB8 | AX << 3 | R15); // mov rax, [r15+rax*8+<offset>]
+							code.emit_imm32_le(table_offset);
+							emit!(0xff, MOD_REG | 0x2 << 3 | AX); // call rax
+						}
 						_ => unreachable!()
 					}
 					if n_params > 0 {
@@ -466,11 +485,10 @@ impl CodeGenerator for IntelX64Compiler {
 
 				},
 				Postamble => {
-					let temp_storage_off = -0x20000i32;
 					emit!(REX_W | REX_R | REX_B, 0x8b, MOD_DISP32 | R12 << 3 | R15); // mov r12, [r15+<offset>]
-					code.emit_imm32_le(temp_storage_off + 12 * 8);
+					code.emit_imm32_le(offset_map.vm_data() + 12 * 8);
 					emit!(REX_W | REX_R | REX_B, 0x8b, MOD_DISP32 | R15 << 3 | R15); // mov r15, [r15+<offset>]
-					code.emit_imm32_le(temp_storage_off + 15 * 8);
+					code.emit_imm32_le(offset_map.vm_data() + 15 * 8);
 				}
 				Return => {
 					emit!(0xc3); // ret near
@@ -526,7 +544,8 @@ impl CodeGenerator for IntelX64Compiler {
 				InitTablePreamble(offset) => {
 					match offset {
 						Reg(offset_reg) => {
-							emit!(REX_W | REX_B, 0x8d, MOD_RM | DI << 3 | MOD_SIB, SIB8 | native_reg(offset_reg) << 3 | R15); // lea rdi, [r15+<roffset>*8]
+							emit!(REX_W | REX_B, 0x8d, MOD_DISP32 | DI << 3 | MOD_SIB, SIB8 | native_reg(offset_reg) << 3 | R15); // lea rdi, [r15+<roffset>*8+<offset>]
+							code.emit_imm32_le(offset_map.table(0)); // FIXME
 							emit!(0xfc); // cld
 						},
 						_ => todo!()
@@ -539,6 +558,7 @@ impl CodeGenerator for IntelX64Compiler {
 							self.abs_off_targets.push(LinkTarget { offset: code.pc(), func_index: *func_index as u32 });
 							code.reloc(Relocation::FunctionAbsoluteAddress);
 							code.emit_imm64_le(0);
+							emit!(REX_W, 0xab); // stosq
 						},
 						_ => todo!()
 					}

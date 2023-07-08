@@ -494,3 +494,30 @@ fn i32_i64_conv() {
 	assert_eq!(test::<_, i64>(wat(r#"(module (func (export "test") (result i64) (i64.extend_i32_s (i32.const 42))))"#), ()), 42);
 	assert_eq!(test::<_, i64>(wat(r#"(module (func (export "test") (result i64) (i64.extend_i32_s (i32.const -42))))"#), ()), -42);
 }
+
+#[test]
+fn call_indirect() {
+	assert_eq!(
+		test_with_imports::<_, i32>(wat(r#"
+			(module
+				(func $fn1 (result i32)
+					i32.const 41
+				)
+				(func $fn2 (result i32)
+					i32.const 42
+				)
+				(func $fn3 (result i32)
+					i32.const 43
+				)
+				(func (export "test") (result i32)
+					i32.const 2
+					call_indirect (type 0)
+				)
+				(table 4 4 funcref)
+				(elem (i32.const 1) $fn1 $fn2 $fn3)
+			)"#),
+			()
+		),
+		42
+	);
+}

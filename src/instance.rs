@@ -63,9 +63,9 @@ impl PvfInstance {
 			memsize += pvf.memory.1;
 		}
 
-		let memseg_mmap = MmapMut::map_anon(memsize as usize * 0x10000).expect("Memory mmap did not fail to create");
+		let memseg_mmap = MmapMut::map_anon(memsize as usize * 0x10000).expect("Memory mmap do not fail to create");
 		let memaddr = (memseg_mmap[..]).as_ptr() as usize;
-		let membase = memaddr + 0x20000;
+		let membase = memaddr + (2 + pvf.tables_pages as usize) * 0x10000;
 
 		let len = (pvf.code_len() | 0xfff) + 1;
 		let mut codeseg_mmap = match MmapMut::map_anon(len) {
@@ -93,6 +93,8 @@ impl PvfInstance {
 			Ok(mmap) => mmap,
 			Err(e) => panic!("Cannot make mmap executable: {:?}", e)
 		};
+
+		println!("CODE SEGMENT AT {:X?}, DATA SEGMENT AT {:X?}", &codeseg_mmap[..].as_ptr(), &memseg_mmap[..].as_ptr());
 
 		let entry_points = pvf.exported_funcs();
 		let init_off = entry_points.get("_pvf_init").expect("Init function found");

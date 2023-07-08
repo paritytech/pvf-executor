@@ -78,10 +78,10 @@ pub trait CodeGenerator {
 }
 
 pub struct OffsetMap {
-	top: isize,
-	globals: isize,
-	vm_data: isize,
-	tables: Vec<isize>,
+	top: i32,
+	globals: i32,
+	vm_data: i32,
+	tables: Vec<i32>,
 }
 
 impl OffsetMap {
@@ -90,11 +90,23 @@ impl OffsetMap {
 	}
 
 	fn add_table(&mut self, num_pages: u32) {
-		self.top -= num_pages as isize * 0x10000;
+		self.top -= num_pages as i32 * 0x10000;
 		self.tables.push(self.top);
 	}
 
 	pub fn get_tables_pages(&self) -> u32 {
 		((-self.top - -self.globals) >> 16) as u32
+	}
+
+	pub fn globals(&self) -> i32 {
+		self.globals
+	}
+
+	pub fn vm_data(&self) -> i32 {
+		self.vm_data
+	}
+
+	pub fn table(&self, index: u32) -> i32 {
+		self.tables[index as usize]
 	}
 }

@@ -477,7 +477,13 @@ impl RawPvf {
 								ir.postamble();
 								ir.r#return();
 							},
-							Op::CallIndirect { type_index, table_index, table_byte } => todo!(),
+							Op::CallIndirect { type_index, table_index, table_byte } => {
+								assert_eq!(table_byte, 0); // Reference types are not supported yet
+								ir.pop(Reg(Sra));
+								let Type::Func(functype) = &types[type_index as usize];
+								let signature = IrSignature { params: functype.params().len() as u32, results: functype.results().len() as u32 };
+								ir.call(IrLabel::Indirect(table_index, Reg32(Sra), signature));
+							},
 							Op::Drop => {
 								ir.pop(Reg(Sra));
 							},

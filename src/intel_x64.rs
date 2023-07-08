@@ -131,16 +131,12 @@ impl CodeGenerator for IntelX64Compiler {
 			match insn {
 				Label(label) => code.label(label.clone()),
 				Preamble => {
-					emit!(REX_W, 0xb8 | AX); // movabs rax, imm64
+					emit!(REX_B, 0x50 | R12); // push r12
+					emit!(REX_B, 0x50 | R15); // push r15
+
+					emit!(REX_W | REX_B, 0xb8 | R15); // movabs r15, imm64
 					code.reloc(Relocation::MemoryAbsolute64);
 					code.emit_imm64_le(0);
-
-					emit!(REX_W | REX_R, 0x89, MOD_DISP32 | R12 << 3 | AX); // mov [rax+<offset>], r12
-					code.emit_imm32_le(offset_map.vm_data() + 12 * 8);
-					emit!(REX_W | REX_R, 0x89, MOD_DISP32 | R15 << 3 | AX); // mov [rax+<offset>], r15
-					code.emit_imm32_le(offset_map.vm_data() + 15 * 8);
-
-					emit!(REX_W | REX_B, 0x89, MOD_REG | AX << 3 | R15); // mov r15, rax
 				}
 				InitLocals(n_locals) => {
 					let n_params = self_signature.params;
@@ -161,9 +157,13 @@ impl CodeGenerator for IntelX64Compiler {
 						}
 
 						if n_stack_params > 0 {
-							// After the last off-stack argument, the return address, old ffp and
-							// old bfp were pushed
-							let mut caller_frame_off = 24u8;
+							// After the last off-stack argument, there were pushed:
+							// - return address (by `call`)
+							// - r12 (in preamble)
+							// - r15 (in preamble)
+							// - rbx (by `Ir` control flow code)
+							// - rbp (by `Ir` control flow code)
+							let mut caller_frame_off = 5u8 * 8;
 
 							for _ in 0..n_stack_params {
 								// FIXME: Long offsets
@@ -485,10 +485,8 @@ impl CodeGenerator for IntelX64Compiler {
 
 				},
 				Postamble => {
-					emit!(REX_W | REX_R | REX_B, 0x8b, MOD_DISP32 | R12 << 3 | R15); // mov r12, [r15+<offset>]
-					code.emit_imm32_le(offset_map.vm_data() + 12 * 8);
-					emit!(REX_W | REX_R | REX_B, 0x8b, MOD_DISP32 | R15 << 3 | R15); // mov r15, [r15+<offset>]
-					code.emit_imm32_le(offset_map.vm_data() + 15 * 8);
+					emit!(REX_B, 0x58 | R15); // pop r15
+					emit!(REX_B, 0x58 | R12); // pop r12
 				}
 				Return => {
 					emit!(0xc3); // ret near

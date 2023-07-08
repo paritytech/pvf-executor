@@ -47,6 +47,9 @@ pub enum IrCp {
     Select(IrOperand, IrOperand, IrOperand, IrOperand),
     Add(IrOperand, IrOperand),
     Sub(IrOperand, IrOperand),
+    Multiply(IrOperand, IrOperand),
+    DivideUnsigned(IrOperand, IrOperand),
+    DivideSigned(IrOperand, IrOperand),
     And(IrOperand, IrOperand),
     Or(IrOperand, IrOperand),
     Xor(IrOperand, IrOperand),
@@ -152,6 +155,18 @@ impl Ir {
 
     pub fn sub(&mut self, dest: IrOperand, src: IrOperand) {
         self.0.push(IrCp::Sub(dest, src));
+    }
+
+    pub fn multiply(&mut self, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::Multiply(dest, src));
+    }
+
+    pub fn divide_unsigned(&mut self, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::DivideUnsigned(dest, src));
+    }
+
+    pub fn divide_signed(&mut self, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::DivideSigned(dest, src));
     }
 
     pub fn compare(&mut self, cond: IrCond, dest: IrOperand, src: IrOperand) {

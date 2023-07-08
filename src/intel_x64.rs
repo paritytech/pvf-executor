@@ -310,6 +310,94 @@ impl CodeGenerator for IntelX64Compiler {
 						_ => todo!()
 					}
 				},
+				Multiply(dest, src) => {
+					match (dest, src) {
+						(Reg32(rdest), Reg32(rsrc)) => {
+							if native_reg(rdest) != AX {
+								if native_reg(rsrc) == AX {
+									emit!(0x90 | native_reg(rdest)); // xchg <rdest32>, <rsrc32>
+								} else {
+									emit!(0x89, MOD_REG | native_reg(rdest) << 3 | AX); // mov eax, <rdest32>
+								}
+							}
+							emit!(0xf7, MOD_REG | 0x5 << 3 | native_reg(rsrc)); // imul <rsrc32>
+						},
+						(Reg(rdest), Reg(rsrc)) => {
+							if native_reg(rdest) != AX {
+								if native_reg(rsrc) == AX {
+									emit!(REX_W, 0x90 | native_reg(rdest)); // xchg <rdest>, <rsrc>
+								} else {
+									emit!(REX_W, 0x89, MOD_REG | native_reg(rdest) << 3 | AX); // mov rax, <rdest>
+								}
+							}
+							emit!(REX_W, 0xf7, MOD_REG | 0x5 << 3 | native_reg(rsrc)); // imul <rsrc>
+						},
+						_ => todo!(),
+					}
+				},
+				// TODO: Refactor `DivideUnsigned` and `DivideSigned` to reuse code
+				DivideUnsigned(dest, src) => {
+					match (dest, src) {
+						(Reg32(rdest), Reg32(rsrc)) => {
+							match (native_reg(rdest), native_reg(rsrc)) {
+								(AX, CX) => (),
+								(CX, AX) => emit!(0x90 | CX), // xchg eax, ecx
+								(AX, DX) => emit!(0x89, MOD_REG | DX << 3 | CX), // mov ecx, edx
+								(DX, AX) => emit!(0x89, MOD_REG | AX << 3 | CX, 0x89, MOD_REG | DX << 3 | AX), // mov ecx, eax // mov eax, edx
+								(CX, DX) => emit!(0x89, MOD_REG | CX << 3 | AX, 0x89, MOD_REG | DX << 3 | CX), // mov eax, ecx // mov ecx, edx
+								(DX, CX) => emit!(0x89, MOD_REG | DX << 3 | AX), // mov eax, edx
+								_ => unreachable!()
+							}
+							emit!(0x31, MOD_REG | DX << 3 | DX); // xor edx, edx
+							emit!(0xf7, MOD_REG | 0x6 << 3 | CX); // div ecx
+						},
+						(Reg(rdest), Reg(rsrc)) => {
+							match (native_reg(rdest), native_reg(rsrc)) {
+								(AX, CX) => (),
+								(CX, AX) => emit!(REX_W, 0x90 | CX), // xchg rax, rcx
+								(AX, DX) => emit!(REX_W, 0x89, MOD_REG | DX << 3 | CX), // mov rcx, rdx
+								(DX, AX) => emit!(REX_W, 0x89, MOD_REG | AX << 3 | CX, REX_W, 0x89, MOD_REG | DX << 3 | AX), // mov rcx, rax // mov rax, rdx
+								(CX, DX) => emit!(REX_W, 0x89, MOD_REG | CX << 3 | AX, REX_W, 0x89, MOD_REG | DX << 3 | CX), // mov rax, rcx // mov rcx, rdx
+								(DX, CX) => emit!(REX_W, 0x89, MOD_REG | DX << 3 | AX), // mov rax, rdx
+								_ => unreachable!()
+							}
+							emit!(0x31, MOD_REG | DX << 3 | DX); // xor edx, edx
+							emit!(REX_W, 0xf7, MOD_REG | 0x6 << 3 | CX); // div rcx
+						},
+						_ => todo!(),
+					}
+				}
+				DivideSigned(dest, src) => {
+					match (dest, src) {
+						(Reg32(rdest), Reg32(rsrc)) => {
+							match (native_reg(rdest), native_reg(rsrc)) {
+								(AX, CX) => (),
+								(CX, AX) => emit!(0x90 | CX), // xchg eax, ecx
+								(AX, DX) => emit!(0x89, MOD_REG | DX << 3 | CX), // mov ecx, edx
+								(DX, AX) => emit!(0x89, MOD_REG | AX << 3 | CX, 0x89, MOD_REG | DX << 3 | AX), // mov ecx, eax // mov eax, edx
+								(CX, DX) => emit!(0x89, MOD_REG | CX << 3 | AX, 0x89, MOD_REG | DX << 3 | CX), // mov eax, ecx // mov ecx, edx
+								(DX, CX) => emit!(0x89, MOD_REG | DX << 3 | AX), // mov eax, edx
+								_ => unreachable!()
+							}
+							emit!(0x99); // cdq
+							emit!(0xf7, MOD_REG | 0x7 << 3 | CX); // idiv ecx
+						},
+						(Reg(rdest), Reg(rsrc)) => {
+							match (native_reg(rdest), native_reg(rsrc)) {
+								(AX, CX) => (),
+								(CX, AX) => emit!(REX_W, 0x90 | CX), // xchg rax, rcx
+								(AX, DX) => emit!(REX_W, 0x89, MOD_REG | DX << 3 | CX), // mov rcx, rdx
+								(DX, AX) => emit!(REX_W, 0x89, MOD_REG | AX << 3 | CX, REX_W, 0x89, MOD_REG | DX << 3 | AX), // mov rcx, rax // mov rax, rdx
+								(CX, DX) => emit!(REX_W, 0x89, MOD_REG | CX << 3 | AX, REX_W, 0x89, MOD_REG | DX << 3 | CX), // mov rax, rcx // mov rcx, rdx
+								(DX, CX) => emit!(REX_W, 0x89, MOD_REG | DX << 3 | AX), // mov rax, rdx
+								_ => unreachable!()
+							}
+							emit!(REX_W, 0x99); // cqo
+							emit!(REX_W, 0xf7, MOD_REG | 0x7 << 3 | CX); // idiv rcx
+						},
+						_ => todo!(),
+					}
+				}
 				Compare(cond, dest, src) => {
 					match (dest, src) {
 						(Reg32(rdest), Reg32(rsrc)) => {

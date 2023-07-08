@@ -50,6 +50,8 @@ pub enum IrCp {
     Multiply(IrOperand, IrOperand),
     DivideUnsigned(IrOperand, IrOperand),
     DivideSigned(IrOperand, IrOperand),
+    RemainderUnsigned(IrOperand, IrOperand),
+    RemainderSigned(IrOperand, IrOperand),
     And(IrOperand, IrOperand),
     Or(IrOperand, IrOperand),
     Xor(IrOperand, IrOperand),
@@ -167,6 +169,14 @@ impl Ir {
 
     pub fn divide_signed(&mut self, dest: IrOperand, src: IrOperand) {
         self.0.push(IrCp::DivideSigned(dest, src));
+    }
+
+    pub fn remainder_unsigned(&mut self, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::RemainderUnsigned(dest, src));
+    }
+
+    pub fn remainder_signed(&mut self, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::RemainderSigned(dest, src));
     }
 
     pub fn compare(&mut self, cond: IrCond, dest: IrOperand, src: IrOperand) {

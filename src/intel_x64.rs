@@ -123,6 +123,17 @@ impl CodeGenerator for IntelX64Compiler {
 			($($e:expr),*) => { { $(code.emit($e));* } }
 		}
 
+		macro_rules! emit_maybe_rexw {
+			($rexw:expr, $($e:expr),*) => {
+				{
+					if $rexw {
+						emit!(REX_W);
+					}
+					emit!($($e),*)
+				}
+			}
+		}
+
 		let mut jmp_targets = Vec::new();
 		println!("S {:?}", signatures);
 		let self_signature = signatures[index as usize].as_ref().expect("Self signature available");
@@ -335,65 +346,39 @@ impl CodeGenerator for IntelX64Compiler {
 						_ => todo!(),
 					}
 				},
-				// TODO: Refactor `DivideUnsigned` and `DivideSigned` to reuse code
-				DivideUnsigned(dest, src) => {
+				DivideUnsigned(dest, src) | DivideSigned(dest, src) | RemainderUnsigned(dest, src) | RemainderSigned(dest, src) => {
 					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => {
+						(Reg32(rdest), Reg32(rsrc)) | (Reg(rdest), Reg(rsrc)) => {
+							let is64 = matches!(dest, Reg(_));
 							match (native_reg(rdest), native_reg(rsrc)) {
 								(AX, CX) => (),
-								(CX, AX) => emit!(0x90 | CX), // xchg eax, ecx
-								(AX, DX) => emit!(0x89, MOD_REG | DX << 3 | CX), // mov ecx, edx
-								(DX, AX) => emit!(0x89, MOD_REG | AX << 3 | CX, 0x89, MOD_REG | DX << 3 | AX), // mov ecx, eax // mov eax, edx
-								(CX, DX) => emit!(0x89, MOD_REG | CX << 3 | AX, 0x89, MOD_REG | DX << 3 | CX), // mov eax, ecx // mov ecx, edx
-								(DX, CX) => emit!(0x89, MOD_REG | DX << 3 | AX), // mov eax, edx
+								(CX, AX) => emit_maybe_rexw!(is64, 0x90 | CX), // xchg {r|e}ax, {r|e}cx
+								(AX, DX) => emit_maybe_rexw!(is64, 0x89, MOD_REG | DX << 3 | CX), // mov {r|e}cx, {r|e}dx
+								(DX, AX) => {
+									emit_maybe_rexw!(is64, 0x89, MOD_REG | AX << 3 | CX); // mov {r|e}cx, {r|e}ax
+									emit_maybe_rexw!(is64, 0x89, MOD_REG | DX << 3 | AX); // mov {r|e}ax, {r|e}dx
+								}
+								(CX, DX) => {
+									emit_maybe_rexw!(is64, 0x89, MOD_REG | CX << 3 | AX); // mov {r|e}ax, {r|e}cx
+									emit_maybe_rexw!(is64, 0x89, MOD_REG | DX << 3 | CX); // mov {r|e}cx, {r|e}dx
+								}
+								(DX, CX) => emit_maybe_rexw!(is64, 0x89, MOD_REG | DX << 3 | AX), // mov {r|e}ax, {r|e}dx
 								_ => unreachable!()
 							}
-							emit!(0x31, MOD_REG | DX << 3 | DX); // xor edx, edx
-							emit!(0xf7, MOD_REG | 0x6 << 3 | CX); // div ecx
-						},
-						(Reg(rdest), Reg(rsrc)) => {
-							match (native_reg(rdest), native_reg(rsrc)) {
-								(AX, CX) => (),
-								(CX, AX) => emit!(REX_W, 0x90 | CX), // xchg rax, rcx
-								(AX, DX) => emit!(REX_W, 0x89, MOD_REG | DX << 3 | CX), // mov rcx, rdx
-								(DX, AX) => emit!(REX_W, 0x89, MOD_REG | AX << 3 | CX, REX_W, 0x89, MOD_REG | DX << 3 | AX), // mov rcx, rax // mov rax, rdx
-								(CX, DX) => emit!(REX_W, 0x89, MOD_REG | CX << 3 | AX, REX_W, 0x89, MOD_REG | DX << 3 | CX), // mov rax, rcx // mov rcx, rdx
-								(DX, CX) => emit!(REX_W, 0x89, MOD_REG | DX << 3 | AX), // mov rax, rdx
+							match insn {
+								DivideSigned(_, _) | RemainderSigned(_, _) => {
+									emit_maybe_rexw!(is64, 0x99); // {cdq|cqo}
+									emit_maybe_rexw!(is64, 0xf7, MOD_REG | 0x7 << 3 | CX); // idiv {r|e}cx
+								},
+								DivideUnsigned(_, _) | RemainderUnsigned(_, _) => {
+									emit!(0x31, MOD_REG | DX << 3 | DX); // xor edx, edx
+									emit_maybe_rexw!(is64, 0xf7, MOD_REG | 0x6 << 3 | CX); // div {r|e}cx
+								},
 								_ => unreachable!()
 							}
-							emit!(0x31, MOD_REG | DX << 3 | DX); // xor edx, edx
-							emit!(REX_W, 0xf7, MOD_REG | 0x6 << 3 | CX); // div rcx
-						},
-						_ => todo!(),
-					}
-				}
-				DivideSigned(dest, src) => {
-					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => {
-							match (native_reg(rdest), native_reg(rsrc)) {
-								(AX, CX) => (),
-								(CX, AX) => emit!(0x90 | CX), // xchg eax, ecx
-								(AX, DX) => emit!(0x89, MOD_REG | DX << 3 | CX), // mov ecx, edx
-								(DX, AX) => emit!(0x89, MOD_REG | AX << 3 | CX, 0x89, MOD_REG | DX << 3 | AX), // mov ecx, eax // mov eax, edx
-								(CX, DX) => emit!(0x89, MOD_REG | CX << 3 | AX, 0x89, MOD_REG | DX << 3 | CX), // mov eax, ecx // mov ecx, edx
-								(DX, CX) => emit!(0x89, MOD_REG | DX << 3 | AX), // mov eax, edx
-								_ => unreachable!()
+							if matches!(insn, RemainderUnsigned(_, _) | RemainderSigned(_, _)) {
+								emit_maybe_rexw!(is64, 0x89, MOD_REG | DX << 3 | AX); // mov {r|e}ax, {r|e}dx
 							}
-							emit!(0x99); // cdq
-							emit!(0xf7, MOD_REG | 0x7 << 3 | CX); // idiv ecx
-						},
-						(Reg(rdest), Reg(rsrc)) => {
-							match (native_reg(rdest), native_reg(rsrc)) {
-								(AX, CX) => (),
-								(CX, AX) => emit!(REX_W, 0x90 | CX), // xchg rax, rcx
-								(AX, DX) => emit!(REX_W, 0x89, MOD_REG | DX << 3 | CX), // mov rcx, rdx
-								(DX, AX) => emit!(REX_W, 0x89, MOD_REG | AX << 3 | CX, REX_W, 0x89, MOD_REG | DX << 3 | AX), // mov rcx, rax // mov rax, rdx
-								(CX, DX) => emit!(REX_W, 0x89, MOD_REG | CX << 3 | AX, REX_W, 0x89, MOD_REG | DX << 3 | CX), // mov rax, rcx // mov rcx, rdx
-								(DX, CX) => emit!(REX_W, 0x89, MOD_REG | DX << 3 | AX), // mov rax, rdx
-								_ => unreachable!()
-							}
-							emit!(REX_W, 0x99); // cqo
-							emit!(REX_W, 0xf7, MOD_REG | 0x7 << 3 | CX); // idiv rcx
 						},
 						_ => todo!(),
 					}

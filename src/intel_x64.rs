@@ -314,7 +314,7 @@ impl CodeGenerator for IntelX64Compiler {
 						_ => todo!()
 					}
 				},
-				Sub(dest, src) => {
+				Subtract(dest, src) => {
 					match (dest, src) {
 						(Reg32(rdest), Reg32(rsrc)) => emit!(0x29, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // sub <dreg32>, <sreg32>
 						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x29, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // sub <dreg>, <sreg>
@@ -429,6 +429,35 @@ impl CodeGenerator for IntelX64Compiler {
 					match (dest, src) {
 						(Reg32(rdest), Reg32(rsrc)) => emit!(0x31, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // xor <dreg32>, <sreg32>
 						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x31, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // xor <dreg>, <sreg>
+						_ => todo!()
+					}
+				},
+				ShiftLeft(dest, cnt) | ShiftRightUnsigned(dest, cnt) | ShiftRightSigned(dest, cnt) | RotateLeft(dest, cnt) | RotateRight(dest, cnt) => {
+					let is64 = matches!(dest, Reg(_));
+					match (dest, cnt) {
+						(Reg32(rdest), Reg32(rcnt)) | (Reg(rdest), Reg(rcnt)) => {
+							let nr_dest = match (native_reg(rdest), native_reg(rcnt)) {
+								(_, CX) => native_reg(rdest),
+								(CX, _) => {
+									emit_maybe_rexw!(is64, 0x87, MOD_REG | native_reg(rdest) << 3 | CX); // xchg <rdest{32|64}>, {r|e}cx
+									native_reg(rcnt)
+								},
+								(_, _) => {
+									emit_maybe_rexw!(is64, 0x89, MOD_REG | native_reg(rcnt) << 3 | CX); // mov {r|e}cx, <rcnt{32|64}>
+									native_reg(rdest)
+								}
+							};
+
+							let (opcode, add) = match insn {
+								ShiftLeft(_, _) => (0xd3, 0x4),
+								ShiftRightUnsigned(_, _) => (0xd3, 0x5),
+								ShiftRightSigned(_, _) => (0xd3, 0x7),
+								RotateLeft(_, _) => (0xd3, 0x0),
+								RotateRight(_, _) => (0xd3, 0x1),
+								_ => unreachable!()
+							};
+							emit_maybe_rexw!(is64, opcode, MOD_REG | add << 3 | nr_dest); // shl/shr/sar/rol/ror <rdest{32|64}>, cl
+						},
 						_ => todo!()
 					}
 				},

@@ -46,7 +46,7 @@ pub enum IrCp {
     CheckIfZero(IrOperand),
     Select(IrOperand, IrOperand, IrOperand, IrOperand),
     Add(IrOperand, IrOperand),
-    Sub(IrOperand, IrOperand),
+    Subtract(IrOperand, IrOperand),
     Multiply(IrOperand, IrOperand),
     DivideUnsigned(IrOperand, IrOperand),
     DivideSigned(IrOperand, IrOperand),
@@ -55,6 +55,11 @@ pub enum IrCp {
     And(IrOperand, IrOperand),
     Or(IrOperand, IrOperand),
     Xor(IrOperand, IrOperand),
+    ShiftLeft(IrOperand, IrOperand),
+    ShiftRightUnsigned(IrOperand, IrOperand),
+    ShiftRightSigned(IrOperand, IrOperand),
+    RotateLeft(IrOperand, IrOperand),
+    RotateRight(IrOperand, IrOperand),
     LeadingZeroes(IrOperand),
     TrailingZeroes(IrOperand),
     BitPopulationCount(IrOperand),
@@ -155,8 +160,8 @@ impl Ir {
         self.0.push(IrCp::Add(dest, src));
     }
 
-    pub fn sub(&mut self, dest: IrOperand, src: IrOperand) {
-        self.0.push(IrCp::Sub(dest, src));
+    pub fn subtract(&mut self, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::Subtract(dest, src));
     }
 
     pub fn multiply(&mut self, dest: IrOperand, src: IrOperand) {
@@ -201,6 +206,26 @@ impl Ir {
 
     pub fn xor(&mut self, dest: IrOperand, src: IrOperand) {
         self.0.push(IrCp::Xor(dest, src));
+    }
+
+    pub fn shift_left(&mut self, dest: IrOperand, cnt: IrOperand) {
+        self.0.push(IrCp::ShiftLeft(dest, cnt));
+    }
+
+    pub fn shift_right_unsigned(&mut self, dest: IrOperand, cnt: IrOperand) {
+        self.0.push(IrCp::ShiftRightUnsigned(dest, cnt));
+    }
+
+    pub fn shift_right_signed(&mut self, dest: IrOperand, cnt: IrOperand) {
+        self.0.push(IrCp::ShiftRightSigned(dest, cnt));
+    }
+
+    pub fn rotate_left(&mut self, dest: IrOperand, cnt: IrOperand) {
+        self.0.push(IrCp::RotateLeft(dest, cnt));
+    }
+
+    pub fn rotate_right(&mut self, dest: IrOperand, cnt: IrOperand) {
+        self.0.push(IrCp::RotateRight(dest, cnt));
     }
 
     pub fn leading_zeroes(&mut self, src: IrOperand) {

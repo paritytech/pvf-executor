@@ -5,12 +5,12 @@ fn wat(code: &str) -> Vec<u8> {
 }
 
 fn test<P: WasmParams, R: WasmResultType>(code: Vec<u8>, params: P) -> R {
-    let raw: RawPvf = RawPvf::from_bytes(&code);
-    let ir = raw.translate().unwrap();
-    let mut codegen = IntelX64Compiler::new();
-    let pvf = ir.compile(&mut codegen);
-    let instance = PvfInstance::instantiate(&pvf);
-    unsafe { instance.call::<_, _, R>("test", params) }.unwrap()
+	let raw: RawPvf = RawPvf::from_bytes(&code);
+	let ir = raw.translate().unwrap();
+	let mut codegen = IntelX64Compiler::new();
+	let pvf = ir.compile(&mut codegen);
+	let instance = PvfInstance::instantiate(&pvf);
+	unsafe { instance.call::<_, _, R>("test", params) }.unwrap()
 }
 
 #[no_mangle]
@@ -23,22 +23,22 @@ extern "C" fn add2(x: i32) -> i32 {
 }
 
 fn test_with_imports<P: WasmParams, R: WasmResultType>(code: Vec<u8>, params: P) -> R {
-    let mut raw = RawPvf::from_bytes(&code);
-    raw.set_import_resolver(|module, name, _ty| {
-    	if module == "env" {
-    		match name {
-    			"add2" => Ok(add2 as *const u8),
-    			_ => Err(PvfError::UnresolvedImport(name.to_owned())),
-    		}
-    	} else {
-    		Err(PvfError::UnresolvedImport(name.to_owned()))
-    	}
-    });
-    let ir = raw.translate().unwrap();
-    let mut codegen = IntelX64Compiler::new();
-    let pvf = ir.compile(&mut codegen);
-    let instance = PvfInstance::instantiate(&pvf);
-    unsafe { instance.call::<_, _, R>("test", params) }.unwrap()
+	let mut raw = RawPvf::from_bytes(&code);
+	raw.set_import_resolver(|module, name, _ty| {
+		if module == "env" {
+			match name {
+				"add2" => Ok(add2 as *const u8),
+				_ => Err(PvfError::UnresolvedImport(name.to_owned())),
+			}
+		} else {
+			Err(PvfError::UnresolvedImport(name.to_owned()))
+		}
+	});
+	let ir = raw.translate().unwrap();
+	let mut codegen = IntelX64Compiler::new();
+	let pvf = ir.compile(&mut codegen);
+	let instance = PvfInstance::instantiate(&pvf);
+	unsafe { instance.call::<_, _, R>("test", params) }.unwrap()
 }
 
 #[test]
@@ -584,7 +584,7 @@ fn i32_i64_conv() {
 #[test]
 fn call_indirect() {
 	assert_eq!(
-		test_with_imports::<_, i32>(wat(r#"
+		test::<_, i32>(wat(r#"
 			(module
 				(func $fn1 (result i32)
 					i32.const 41
@@ -601,6 +601,29 @@ fn call_indirect() {
 				)
 				(table 4 4 funcref)
 				(elem (i32.const 1) $fn1 $fn2 $fn3)
+			)"#),
+			()
+		),
+		42
+	);
+}
+
+
+#[test]
+fn memory_init() {
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func (export "test") (result i32)
+					i32.const 5
+					i32.load8_s
+					i32.const 6
+					i32.load
+					i32.add
+				)
+				(memory 1)
+				(export "memory" (memory 0))
+				(data (i32.const 5) "\d6\54\00\00\00")
 			)"#),
 			()
 		),

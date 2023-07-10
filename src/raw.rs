@@ -2,7 +2,7 @@ use crate::{PvfError, IrPvf};
 use crate::ir::{Ir, IrLabel, IrOperand::*, IrReg::*, IrCond::*, IrSignature, IrHints};
 // use std::assert_matches::assert_matches;
 use std::collections::HashMap;
-use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType, Import, Encoding, TypeRef, TableInit, FuncType, OperatorsReader, ElementKind, ElementItems};
+use wasmparser::{Parser, ExternalKind, Type, Payload, Operator as Op, BlockType, Import, Encoding, TypeRef, TableInit, FuncType, OperatorsReader, ElementKind, ElementItems, DataKind};
 
 enum ControlFrameType {
 	Func,
@@ -82,6 +82,7 @@ impl RawPvf {
 		let mut mem_max = 0;
 		let mut globals = Vec::new();
 		let mut hints = IrHints::default();
+		let mut data_chunk_cnt = 0;
 
 		for payload in Parser::new(0).parse_all(&self.wasm_code) {
 			match payload? {
@@ -462,7 +463,7 @@ impl RawPvf {
 								ir.pop(Reg(Srd));
 								ir.r#move(Memory32(memarg.offset as i32, Srd), Reg32(Sra));
 							},
-							Op::Unreachable => todo!(),
+							Op::Unreachable => ir.trap(),
 							Op::Nop => (),
 							Op::If { blockty } => todo!(),
 							Op::Else => todo!(),
@@ -581,8 +582,25 @@ impl RawPvf {
 						}
 					}
 				},
+				Payload::DataSection(reader) => {
+					for data in reader.into_iter() {
+						let data = data.unwrap();
+						if let DataKind::Active { memory_index, offset_expr } = data.kind {
+							assert_eq!(memory_index, 0); // WASM MVP only supports single memory
+
+							ir_pvf.add_data_chunk(data.data);
+
+							let mut init_offset_ir = parse_const_expr(offset_expr.get_operators_reader(), &globals)?;
+							init_ir.append(&mut init_offset_ir);
+							init_ir.pop(Reg(Sra));
+							init_ir.init_memory_from_chunk(data_chunk_cnt, data.data.len() as u32, Reg(Sra));
+							data_chunk_cnt += 1;
+						} else {
+							todo!("Passive data segment");
+						}
+					}
+				},
 				Payload::DataCountSection { count, range } => todo!(),
-				Payload::DataSection(_) => todo!(),
 				Payload::CodeSectionStart { count, range, size } => (), // FIXME
 				Payload::ModuleSection { parser, range } => todo!(),
 				Payload::InstanceSection(_) => todo!(),

@@ -1,4 +1,4 @@
-use crate::{ir::IrLabel, codegen::Relocation};
+use crate::{ir::IrLabel, codegen::{Relocation, OffsetMap}};
 use std::collections::HashMap;
 
 pub struct PreparedPvf {
@@ -7,6 +7,8 @@ pub struct PreparedPvf {
 	pub(crate) relocs: Vec<(Relocation, usize)>,
 	pub(crate) memory: (u32, u32),
 	pub(crate) tables_pages: u32,
+	pub(crate) data_chunks: Vec<Vec<u8>>,
+	pub(crate) offset_map: OffsetMap,
 }
 
 impl PreparedPvf {
@@ -26,5 +28,9 @@ impl PreparedPvf {
 			}
 		}
 		res
+	}
+
+	pub fn data_segments_pages(&self) -> u32 {
+		self.data_chunks.iter().map(|s| ((s.len() | 0xffff + 1) >> 16) as u32).sum()
 	}
 }

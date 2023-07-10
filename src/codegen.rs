@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::ir::{Ir, IrLabel, IrSignature, IrTable};
+use crate::ir::{Ir, IrLabel, IrSignature, IrTable, IrDataChunk};
 
 pub enum Relocation {
 	MemoryAbsolute64,
@@ -55,7 +55,7 @@ impl CodeEmitter {
 }
 
 pub trait CodeGenerator {
-	fn build_offset_map(&self, ir_tables: &Vec<IrTable>) -> OffsetMap {
+	fn build_offset_map(&self, ir_tables: &Vec<IrTable>, ir_chunks: &Vec<IrDataChunk>) -> OffsetMap {
 		let mut map = OffsetMap::new();
 		for table in ir_tables {
 			match table {
@@ -70,6 +70,12 @@ pub trait CodeGenerator {
 				}
 			}
 		}
+		for chunk in ir_chunks {
+			let aligned_byte_size = chunk.data_len() as u32 | 0xffff + 1;
+			let num_pages = aligned_byte_size >> 16;
+			println!("Reserving {} page(s) for data chunk", num_pages);
+			map.add_data_chunk(num_pages);
+		}
 		map
 	}
 	fn compile_func(&mut self, code: &mut CodeEmitter, index: u32, body: Ir, signatures: &Vec<Option<IrSignature>>, offset_map: &OffsetMap);
@@ -82,16 +88,22 @@ pub struct OffsetMap {
 	globals: i32,
 	vm_data: i32,
 	tables: Vec<i32>,
+	data_chunks: Vec<i32>,
 }
 
 impl OffsetMap {
 	pub fn new() -> Self {
-		Self { top: -0x20000, globals: -0x20000, vm_data: -0x10000, tables: Vec::new() }
+		Self { top: -0x20000, globals: -0x20000, vm_data: -0x10000, tables: Vec::new(), data_chunks: Vec::new() }
 	}
 
 	fn add_table(&mut self, num_pages: u32) {
 		self.top -= num_pages as i32 * 0x10000;
 		self.tables.push(self.top);
+	}
+
+	fn add_data_chunk(&mut self, num_pages: u32) {
+		self.top -= num_pages as i32 * 0x10000;
+		self.data_chunks.push(self.top);
 	}
 
 	pub fn get_tables_pages(&self) -> u32 {
@@ -108,5 +120,9 @@ impl OffsetMap {
 
 	pub fn table(&self, index: u32) -> i32 {
 		self.tables[index as usize]
+	}
+
+	pub fn data_chunk(&self, index: u32) -> i32 {
+		self.data_chunks[index as usize]
 	}
 }

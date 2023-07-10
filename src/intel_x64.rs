@@ -2,7 +2,15 @@ use crate::{CodeGenerator, codegen::{CodeEmitter, Relocation, OffsetMap}, ir::{I
 
 // Memory segment map
 //
-// Table start is aligned to page size
+// Tables and data chunks are aligned to page size
+//
+//                 +-------------------+
+//                 | DataChunkN        |
+//                ~~~~~~~~~~~~~~~~~~~~~~~
+//                 +-------------------+
+//                 | DataChunk1        |
+//                 +-------------------+
+//                 | DataChunk0        |
 //                 +-------------------+
 //                 | TableN            |
 //                ~~~~~~~~~~~~~~~~~~~~~~~
@@ -663,7 +671,21 @@ impl CodeGenerator for IntelX64Compiler {
 						_ => todo!()
 					}
 				},
-				InitTablePostamble => ()
+				InitTablePostamble => (),
+				InitMemoryFromChunk(chunk_idx, chunk_len, offset) => {
+					match offset {
+						Reg(offset_reg) => {
+							emit!(REX_W | REX_B, 0x8d, MOD_RM | DI << 3 | MOD_SIB, SIB1 | native_reg(offset_reg) << 3 | R15); // lea rdi, [r15+<roffset>*1]
+						},
+						_ => todo!()
+					}
+					emit!(REX_W | REX_B, 0x8d, MOD_DISP32 | SI << 3 | R15); // lea rsi, [r15+<offset>]
+					code.emit_imm32_le(offset_map.data_chunk(*chunk_idx));
+					emit!(0xb8 | CX); // mov ecx, <imm32>
+					code.emit_imm32_le(*chunk_len as i32);
+					emit!(0xfc); // cld
+					emit!(0xf3, 0xa4); // rep movsb
+				}
 			}
 		}
 

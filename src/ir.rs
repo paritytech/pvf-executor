@@ -37,6 +37,7 @@ pub enum IrCp {
     InitTablePreamble(IrOperand),
     InitTableElement(IrOperand),
     InitTablePostamble,
+    InitMemoryFromChunk(u32, u32, IrOperand),
     Push(IrOperand),
     Pop(IrOperand),
     Move(IrOperand, IrOperand),
@@ -66,9 +67,9 @@ pub enum IrCp {
     Jump(IrLabel),
     JumpIf(IrCond, IrLabel),
     Call(IrLabel),
+    Postamble,
     Return,
     Trap,
-    Postamble,
 }
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
@@ -134,6 +135,10 @@ impl Ir {
 
     pub fn init_table_postamble(&mut self) {
         self.0.push(IrCp::InitTablePostamble);
+    }
+
+    pub fn init_memory_from_chunk(&mut self, chunk_idx: u32, chunk_len: u32, offset_reg: IrOperand) {
+        self.0.push(IrCp::InitMemoryFromChunk(chunk_idx, chunk_len, offset_reg));
     }
 
     pub fn push(&mut self, src: IrOperand) {
@@ -277,6 +282,19 @@ pub enum IrTable {
     Table(u32),
 }
 
+// They are called "data segments" in the Wasm spec. However, "data chunk" term is used
+// throughout the code to avoid confusion with the data segment of the OS process.
+#[derive(Debug, Clone)]
+pub struct IrDataChunk {
+    data: Vec<u8>
+}
+
+impl IrDataChunk {
+    pub(crate) fn data_len(&self) -> usize {
+        self.data.len()
+    }
+}
+
 #[derive(Debug)]
 pub struct IrPvf {
 	hints: IrHints,
@@ -285,6 +303,7 @@ pub struct IrPvf {
     signatures: Vec<Option<IrSignature>>,
     memory: (u32, u32),
     tables: Vec<IrTable>,
+    data_chunks: Vec<IrDataChunk>,
 }
 
 impl std::fmt::Debug for Ir {
@@ -315,7 +334,7 @@ pub struct IrHints {
 
 impl IrPvf {
     pub(crate) fn new() -> Self {
-        Self { hints: IrHints::default(), funcs: Vec::new(), signatures: Vec::new(), memory: (0, 0), tables: Vec::new() }
+        Self { hints: IrHints::default(), funcs: Vec::new(), signatures: Vec::new(), memory: (0, 0), tables: Vec::new(), data_chunks: Vec::new() }
     }
 
     fn ensure_func_vec_size(&mut self, index: u32) {
@@ -343,6 +362,10 @@ impl IrPvf {
         self.tables.push(IrTable::Table(max_size));
     }
 
+    pub(crate) fn add_data_chunk(&mut self, data: &[u8]) {
+        self.data_chunks.push(IrDataChunk { data: data.to_vec() });
+    }
+
     pub(crate) fn set_memory(&mut self, min: u32, max: u32) {
         self.memory = (min, max);
     }
@@ -353,7 +376,7 @@ impl IrPvf {
 
     pub fn compile(self, codegen: &mut dyn CodeGenerator) -> PreparedPvf {
         let mut code = CodeEmitter::new();
-        let offset_map = codegen.build_offset_map(&self.tables);
+        let offset_map = codegen.build_offset_map(&self.tables, &self.data_chunks);
 
         for (func_idx, maybe_ir) in self.funcs.into_iter().enumerate() {
             if let Some(IrFunc::Function(ir)) = maybe_ir {
@@ -364,6 +387,9 @@ impl IrPvf {
 
         println!("CODE: {:02X?}", code.code);
 
-        PreparedPvf { code: code.code, labels: code.labels, relocs: code.relocs, memory: self.memory, tables_pages: offset_map.get_tables_pages() }
+        PreparedPvf {
+            code: code.code, labels: code.labels, relocs: code.relocs, memory: self.memory, tables_pages: offset_map.get_tables_pages(),
+            data_chunks: self.data_chunks.into_iter().map(|s| s.data).collect(), offset_map,
+         }
     }
 }

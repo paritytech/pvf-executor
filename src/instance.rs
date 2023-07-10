@@ -49,6 +49,14 @@ impl_wasm_params!(A0 A1 A2 A3 A4 A5 A6 A7 A8 A9);
 impl_wasm_params!(A0 A1 A2 A3 A4 A5 A6 A7 A8 A9 A10);
 impl_wasm_params!(A0 A1 A2 A3 A4 A5 A6 A7 A8 A9 A10 A11);
 
+fn offset_by(base: usize, offset: i32) -> usize {
+	if offset.is_negative() {
+		base - offset.abs() as usize
+	} else {
+		base + offset as usize
+	}
+}
+
 pub struct PvfInstance {
 	codeseg: Mmap,
 	memseg: MmapMut,
@@ -57,15 +65,20 @@ pub struct PvfInstance {
 
 impl PvfInstance {
 	pub fn instantiate(pvf: &PreparedPvf) -> Self {
-		let mut memsize = 2 + pvf.tables_pages;
+		let mut memsize = 2 + pvf.tables_pages + pvf.data_segments_pages();
 
 		if pvf.memory.0 > 0 {
 			memsize += pvf.memory.1;
 		}
 
-		let memseg_mmap = MmapMut::map_anon(memsize as usize * 0x10000).expect("Memory mmap do not fail to create");
+		let mut memseg_mmap = MmapMut::map_anon(memsize as usize * 0x10000).expect("Memory mmap do not fail to create");
 		let memaddr = (memseg_mmap[..]).as_ptr() as usize;
-		let membase = memaddr + (2 + pvf.tables_pages as usize) * 0x10000;
+		let membase = memaddr + (2 + pvf.tables_pages as usize + pvf.data_segments_pages() as usize) * 0x10000;
+
+		for (idx, chunk) in pvf.data_chunks.iter().enumerate() {
+			let chunk_offset = offset_by(membase - memaddr, pvf.offset_map.data_chunk(idx as u32));
+			(&mut memseg_mmap[chunk_offset..chunk_offset + chunk.len()]).copy_from_slice(&chunk[..]);
+		}
 
 		let len = (pvf.code_len() | 0xfff) + 1;
 		let mut codeseg_mmap = match MmapMut::map_anon(len) {

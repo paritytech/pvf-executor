@@ -93,7 +93,12 @@ impl PvfInstance {
 					(&mut codeseg_mmap[*off..*off + 8]).copy_from_slice(&membase.to_le_bytes()[..]);
 				},
 				Relocation::FunctionAbsoluteAddress => {
-					let offset = usize::from_le_bytes(codeseg_mmap[*off..*off + 8][..].try_into().expect("Lenght is constant"));
+					let offset = usize::from_le_bytes(codeseg_mmap[*off..*off + 8][..].try_into().expect("Length is constant"));
+					let addr = (&codeseg_mmap[..]).as_ptr() as usize + offset;
+					(&mut codeseg_mmap[*off..*off + 8]).copy_from_slice(&addr.to_le_bytes()[..]);
+				},
+				Relocation::LabelAbsoluteAddress(label) => {
+					let offset = *pvf.labels.get(label).expect("Unresolved label");
 					let addr = (&codeseg_mmap[..]).as_ptr() as usize + offset;
 					(&mut codeseg_mmap[*off..*off + 8]).copy_from_slice(&addr.to_le_bytes()[..]);
 				}

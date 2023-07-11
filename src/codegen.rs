@@ -4,6 +4,7 @@ use crate::ir::{Ir, IrLabel, IrSignature, IrTable, IrDataChunk};
 pub enum Relocation {
 	MemoryAbsolute64,
 	FunctionAbsoluteAddress,
+	LabelAbsoluteAddress(IrLabel),
 }
 
 pub struct CodeEmitter {

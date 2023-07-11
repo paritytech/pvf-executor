@@ -166,7 +166,8 @@ impl RawPvf {
 							{
 								ir.pop(Reg($src));
 								ir.pop(Reg($dest));
-								ir.compare($cond, $reg($dest), $reg($src));
+								ir.compare($reg($dest), $reg($src));
+								ir.set_if($cond, $reg($dest));
 								ir.push(Reg($dest));
 							}
 						};
@@ -310,6 +311,37 @@ impl RawPvf {
 
 								if matches!(op, Op::BrIf { .. }) {
 									ir.label(IrLabel::LocalLabel(else_label));
+								}
+							},
+							Op::BrTable { targets } => {
+								let default_frame = &cstack[cstack.len() - targets.default() as usize - 1];
+								let mut br_targets = targets.targets().collect::<Result<Vec<_>, _>>()?;
+								br_targets.push(targets.default());
+								ir.pop(Reg(Src)); // Branch target index
+								ir.r#move(Reg32(Srd), Imm32(br_targets.len() as i32 - 1));
+								ir.compare(Reg32(Src), Reg32(Srd));
+								ir.move_if(GreaterUnsigned, Reg32(Src), Reg32(Srd));
+
+								if default_frame.has_retval {
+									ir.pop(Reg(Sra));
+								}
+
+								let mut exit_labels = Vec::new();
+								for _ in 0..br_targets.len() {
+									exit_labels.push(IrLabel::LocalLabel(local_label_index));
+									local_label_index += 1;
+								}
+
+								ir.jump_table(Reg32(Src), exit_labels.clone());
+
+								for (i, target) in br_targets.iter().enumerate() {
+									let frame = &cstack[cstack.len() - *target as usize - 1];
+									ir.label(exit_labels[i].clone());
+									for _ in 0..*target {
+										ir.r#move(Reg(Stp), Reg(Bfp));
+										ir.pop(Reg(Bfp));
+									}
+									ir.jump(IrLabel::BranchTarget(frame.block_index));
 								}
 							},
 							Op::End => {
@@ -467,7 +499,6 @@ impl RawPvf {
 							Op::Nop => (),
 							Op::If { blockty } => todo!(),
 							Op::Else => todo!(),
-							Op::BrTable { targets } => todo!(),
 							Op::Return => {
 								if ftype.results().len() > 0 {
 									ir.pop(Reg(Sra));

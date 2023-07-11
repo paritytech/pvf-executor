@@ -1,3 +1,5 @@
+use std::matches;
+
 use crate::{CodeGenerator, codegen::{CodeEmitter, Relocation, OffsetMap}, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*, IrCond, IrCond::*, IrLabel, IrSignature}};
 
 // Memory segment map
@@ -81,7 +83,9 @@ const MOD_RM: u8 = 0x00;
 const MOD_DISP8: u8 = 0x40;
 const MOD_DISP32: u8 = 0x80;
 const MOD_REG: u8 = 0xc0;
-const MOD_SIB: u8 = 0x04;
+
+const MOD_SIB: u8 = 0x4;
+const MOD_RIPREL: u8 = 0x5;
 
 const SIB1: u8 = 0x00;
 const SIB2: u8 = 0x40;
@@ -220,7 +224,7 @@ impl CodeGenerator for IntelX64Compiler {
 							// mov <dreg>, <sreg>
 							emit!(REX_W, 0x89, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest));
 						},
-						(Reg(rdest), Imm32(imm)) => {
+						(Reg(rdest), Imm32(imm)) | (Reg32(rdest), Imm32(imm)) => {
 							// mov <dreg>, <imm32>
 							emit!(0xb8 | native_reg(rdest));
 							code.emit_imm32_le(*imm);
@@ -299,6 +303,14 @@ impl CodeGenerator for IntelX64Compiler {
 						unk => todo!("ir Mov {:?}", unk),
 					}
 				},
+				MoveIf(cond, dest, src) => {
+					match (dest, src) {
+						(Reg32(rdest), Reg32(rsrc)) => {
+							emit!(0x0f, 0x40 | native_cond(cond), MOD_REG | native_reg(rdest) << 3 | native_reg(rsrc)); // cmovcc <rdest32>, <rsrc32>
+						},
+						_ => todo!()
+					}
+				}
 				ZeroExtend(src) => {
 					match src {
 						Reg8(rsrc) => emit!(0x0f, 0xb6, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movzx <rsrc32>, <rsrc8>
@@ -308,6 +320,9 @@ impl CodeGenerator for IntelX64Compiler {
 					}
 				},
 				SignExtend(src) => {
+					// FIXME!!!
+					// When extending to i32, should not sign-extend to upper 32 bits
+					// Not sure if matters but just to be on the safe side
 					match src {
 						Reg8(rsrc) => emit!(REX_W, 0x0f, 0xbe, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movsx <rsrc>, <rsrc8>
 						Reg16(rsrc) => emit!(REX_W, 0x0f, 0xbf, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movsx <rsrc>, <rsrc16>
@@ -391,21 +406,23 @@ impl CodeGenerator for IntelX64Compiler {
 						_ => todo!(),
 					}
 				}
-				Compare(cond, dest, src) => {
+				Compare(dest, src) => {
 					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => {
-							emit!(0x39, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)); // cmp <dreg32>, <sreg32>
-							emit!(0x0f, 0x90 | native_cond(cond), MOD_REG | native_reg(rdest)); // setcc <dreg8>
-							emit!(0x0f, 0xb6, MOD_REG | native_reg(rdest) << 3 | native_reg(rdest)); // movzx <dreg32>, <dreg8>
+						(Reg32(rdest), Reg32(rsrc)) | (Reg(rdest), Reg(rsrc)) => {
+							emit_maybe_rexw!(matches!(dest, Reg(_)), 0x39, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)); // cmp <dreg{32|64}>, <sreg{32|64}>
 						},
-						(Reg(rdest), Reg(rsrc)) => {
-							emit!(REX_W, 0x39, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)); // cmp <dreg32>, <sreg32>
+						_ => unreachable!()
+					}
+				},
+				SetIf(cond, dest) => {
+					match dest {
+						Reg(rdest) | Reg32(rdest) => {
 							emit!(0x0f, 0x90 | native_cond(cond), MOD_REG | native_reg(rdest)); // setcc <dreg8>
 							emit!(0x0f, 0xb6, MOD_REG | native_reg(rdest) << 3 | native_reg(rdest)); // movzx <dreg32>, <dreg8>
 						},
 						_ => unreachable!()
 					}
-				},
+				}
 				CheckIfZero(src) => {
 					match src {
 						Reg(rsrc) | Reg32(rsrc) => {
@@ -481,6 +498,27 @@ impl CodeGenerator for IntelX64Compiler {
 					jmp_targets.push(JmpTarget(code.pc(), label.clone()));
 					code.emit_imm32_le(0);
 				},
+				JumpTable(index, targets) => {
+					match index {
+						Reg32(rindex) => {
+							// FIXME: It is implicit that this operation should preserve Sra as it
+							// already contains the block return value, if any. It breaks the
+							// "scratch-all" concept and should be refactored.
+							//
+							// BEWARE: rip-relative addressing with hardcoded offset
+							emit!(REX_W, 0x8d, MOD_RM | DI << 3 | MOD_RIPREL, 0x08, 0x00, 0x00, 0x00); // lea rdi, [rip+8]
+							emit!(0xc1, MOD_REG | 0x4 << 3 | native_reg(rindex), 0x03); // shl <rindex32>, 3
+							emit!(REX_W, 0x01, MOD_REG | native_reg(rindex) << 3 | DI); // add rdi, <rindex32>
+							emit!(0xff, MOD_RM | 0x4 << 3 | DI); // jmp [rdi]
+
+							for target in targets {
+								code.reloc(Relocation::LabelAbsoluteAddress(target.clone()));
+								code.emit_imm64_le(0);
+							}
+						},
+						_ => todo!()
+					}
+				}
 				Call(label) => {
 					let (findex, signature) = match label {
 						IrLabel::AnonymousFunc(idx) | IrLabel::ExportedFunc(idx, _) | IrLabel::ImportedFunc(idx, _) => {

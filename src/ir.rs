@@ -41,9 +41,11 @@ pub enum IrCp {
     Push(IrOperand),
     Pop(IrOperand),
     Move(IrOperand, IrOperand),
+    MoveIf(IrCond, IrOperand, IrOperand),
     ZeroExtend(IrOperand),
     SignExtend(IrOperand),
-    Compare(IrCond, IrOperand, IrOperand),
+    Compare(IrOperand, IrOperand),
+    SetIf(IrCond, IrOperand),
     CheckIfZero(IrOperand),
     Select(IrOperand, IrOperand, IrOperand, IrOperand),
     Add(IrOperand, IrOperand),
@@ -66,6 +68,7 @@ pub enum IrCp {
     BitPopulationCount(IrOperand),
     Jump(IrLabel),
     JumpIf(IrCond, IrLabel),
+    JumpTable(IrOperand, Vec<IrLabel>),
     Call(IrLabel),
     Postamble,
     Return,
@@ -153,6 +156,10 @@ impl Ir {
         self.0.push(IrCp::Move(dest, src));
     }
 
+    pub fn move_if(&mut self, cond: IrCond, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::MoveIf(cond, dest, src));
+    }
+
     pub fn zero_extend(&mut self, src: IrOperand) {
         self.0.push(IrCp::ZeroExtend(src));
     }
@@ -189,8 +196,12 @@ impl Ir {
         self.0.push(IrCp::RemainderSigned(dest, src));
     }
 
-    pub fn compare(&mut self, cond: IrCond, dest: IrOperand, src: IrOperand) {
-        self.0.push(IrCp::Compare(cond, dest, src));
+    pub fn compare(&mut self, dest: IrOperand, src: IrOperand) {
+        self.0.push(IrCp::Compare(dest, src));
+    }
+
+    pub fn set_if(&mut self, cond: IrCond, dest: IrOperand) {
+        self.0.push(IrCp::SetIf(cond, dest));
     }
 
     pub fn check_if_zero(&mut self, op: IrOperand) {
@@ -251,6 +262,10 @@ impl Ir {
 
     pub fn jump_if(&mut self, cond: IrCond, target: IrLabel) {
         self.0.push(IrCp::JumpIf(cond, target));
+    }
+
+    pub fn jump_table(&mut self, index: IrOperand, targets: Vec<IrLabel>) {
+        self.0.push(IrCp::JumpTable(index, targets));
     }
 
     pub fn call(&mut self, target: IrLabel) {

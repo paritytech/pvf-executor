@@ -1,6 +1,6 @@
 use std::matches;
 
-use crate::{CodeGenerator, codegen::{CodeEmitter, Relocation, OffsetMap}, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*, IrCond, IrCond::*, IrLabel, IrSignature}};
+use crate::{CodeGenerator, codegen::{self, CodeEmitter, Relocation, OffsetMap}, ir::{Ir, IrReg, IrReg::*, IrCp::*, IrOperand::*, IrCond, IrCond::*, IrLabel, IrSignature}};
 
 // Memory segment map
 //
@@ -528,7 +528,7 @@ impl CodeGenerator for IntelX64Compiler {
 						IrLabel::Indirect(_table_index, op, signature) => {
 							match op {
 								Reg32(op_reg) => {
-									let offset = offset_map.vm_data() + 0 * 8;
+									let offset = offset_map.vm_data() + codegen::VM_DATA_TMP_0 * 8;
 									emit!(REX_W | REX_B, 0x89, MOD_DISP32 | native_reg(op_reg) << 3 | R15); // mov [r15+<offset>], <rsrc>
 									code.emit_imm32_le(offset);
 									(None, signature)
@@ -605,7 +605,7 @@ impl CodeGenerator for IntelX64Compiler {
 						},
 						IrLabel::Indirect(table_index, _, _) => {
 							let table_offset = offset_map.table(*table_index);
-							let stored_func_index_offset = offset_map.vm_data() + 0 * 8;
+							let stored_func_index_offset = offset_map.vm_data() + codegen::VM_DATA_TMP_0 * 8;
 							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | AX << 3 | R15); // mov rax, [r15+<offset>]
 							code.emit_imm32_le(stored_func_index_offset);
 							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | AX << 3 | MOD_SIB, SIB8 | AX << 3 | R15); // mov rax, [r15+rax*8+<offset>]
@@ -723,6 +723,36 @@ impl CodeGenerator for IntelX64Compiler {
 					code.emit_imm32_le(*chunk_len as i32);
 					emit!(0xfc); // cld
 					emit!(0xf3, 0xa4); // rep movsb
+				},
+				MemoryGrow(pages) => {
+					match pages {
+						Reg32(rpages) => {
+							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | SI << 3 | R15); // mov rsi, [r15+<offset>]
+							code.emit_imm32_le(offset_map.vm_data() + codegen::VM_DATA_MEM_ALLOC);
+							emit!(REX_W, 0x89, MOD_REG | SI << 3 | DI); // mov rdi, rsi
+							emit!(REX_W, 0x01, MOD_REG | native_reg(rpages) << 3 | SI); // add rsi, <rpages>
+							emit!(REX_W | REX_B, 0x3b, MOD_DISP32 | SI << 3 | R15); // cmp rsi, [r15+<offset>]
+							code.emit_imm32_le(offset_map.vm_data() + codegen::VM_DATA_MEM_TOTAL);
+							emit!(0x77, 0x09); // ja fail
+							emit!(REX_W | REX_B, 0x89, MOD_DISP32 | SI << 3 | R15); // mov [r15+<offset>], rsi
+							code.emit_imm32_le(offset_map.vm_data() + codegen::VM_DATA_MEM_ALLOC);
+							emit!(0xeb, 0x05); // jmp end
+							// fail:
+							emit!(0xb8 | DI, 0xff, 0xff, 0xff, 0xff); // mov edi, -1
+							// end:
+							emit!(0x89, MOD_REG | DI << 3 | native_reg(rpages)); // mov <rpages32>, edi
+						},
+						_ => unreachable!()
+					}
+				},
+				MemorySize(dest) => {
+					match dest {
+						Reg32(rdest) => {
+							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | R15); // mov <rdest>, [r15+<offset>]
+							code.emit_imm32_le(offset_map.vm_data() + codegen::VM_DATA_MEM_ALLOC);
+						},
+						_ => unreachable!()
+					}
 				}
 			}
 		}

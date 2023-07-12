@@ -70,6 +70,8 @@ pub enum IrCp {
     JumpIf(IrCond, IrLabel),
     JumpTable(IrOperand, Vec<IrLabel>),
     Call(IrLabel),
+    MemoryGrow(IrOperand),
+    MemorySize(IrOperand),
     Postamble,
     Return,
     Trap,
@@ -274,6 +276,14 @@ impl Ir {
 
     pub fn trap(&mut self) {
         self.0.push(IrCp::Trap);
+    }
+
+    pub fn memory_grow(&mut self, pages: IrOperand) {
+        self.0.push(IrCp::MemoryGrow(pages));
+    }
+
+    pub fn memory_size(&mut self, dest: IrOperand) {
+        self.0.push(IrCp::MemorySize(dest));
     }
 
     pub fn postamble(&mut self) {

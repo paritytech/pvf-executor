@@ -129,7 +129,7 @@ impl RawPvf {
 					assert!(!mem.memory64);
 					assert!(!mem.shared);
 					mem_initial = mem.initial as u32;
-					mem_max = if let Some(max) = mem.maximum { max as u32 } else { mem_initial };
+					mem_max = if let Some(max) = mem.maximum { max as u32 } else { mem_initial + 128 };
 					ir_pvf.set_memory(mem_initial, mem_max);
 				}
 				Payload::ExportSection(reader) => {
@@ -526,8 +526,17 @@ impl RawPvf {
 								ir.select(Reg32(Src), Reg(Sra), Reg(Srd), Reg(Sra));
 								ir.push(Reg(Sra));
 							},
-							Op::MemorySize { mem, mem_byte } => todo!(),
-							Op::MemoryGrow { mem, mem_byte } => todo!(),
+							Op::MemorySize { mem: _, mem_byte } => {
+								assert_eq!(mem_byte, 0);
+								ir.memory_size(Reg32(Sra));
+								ir.push(Reg(Sra));
+							},
+							Op::MemoryGrow { mem: _, mem_byte } => {
+								assert_eq!(mem_byte, 0);
+								ir.pop(Reg(Sra));
+								ir.memory_grow(Reg32(Sra));
+								ir.push(Reg(Sra));
+							},
 							Op::I32Clz => impl_unary!(Reg32, Sra, leading_zeroes),
 							Op::I32Ctz => impl_unary!(Reg32, Sra, trailing_zeroes),
 							Op::I32Popcnt => impl_unary!(Reg32, Sra, bit_population_count),

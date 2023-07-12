@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use memmap::{MmapMut, Mmap};
-use crate::{PreparedPvf, PvfError, codegen::Relocation};
+use crate::{PreparedPvf, PvfError, codegen::{self, Relocation}};
 
 trait WasmType: Send {}
 impl WasmType for i32 {}
@@ -67,13 +67,18 @@ impl PvfInstance {
 	pub fn instantiate(pvf: &PreparedPvf) -> Self {
 		let mut memsize = 2 + pvf.tables_pages + pvf.data_segments_pages();
 
-		if pvf.memory.0 > 0 {
+		if pvf.memory.1 > 0 {
 			memsize += pvf.memory.1;
 		}
 
 		let mut memseg_mmap = MmapMut::map_anon(memsize as usize * 0x10000).expect("Memory mmap do not fail to create");
 		let memaddr = (memseg_mmap[..]).as_ptr() as usize;
 		let membase = memaddr + (2 + pvf.tables_pages as usize + pvf.data_segments_pages() as usize) * 0x10000;
+
+		let vm_data_offset = offset_by(membase - memaddr, pvf.offset_map.vm_data());
+		println!("Setting PVF memory, initial {} page(s), max. {} page(s)", pvf.memory.0, pvf.memory.1);
+		(&mut memseg_mmap[vm_data_offset + codegen::VM_DATA_MEM_ALLOC as usize..vm_data_offset + codegen::VM_DATA_MEM_ALLOC as usize + 8]).copy_from_slice(&(pvf.memory.0 as u64).to_le_bytes()[..]);
+		(&mut memseg_mmap[vm_data_offset + codegen::VM_DATA_MEM_TOTAL as usize..vm_data_offset + codegen::VM_DATA_MEM_TOTAL as usize + 8]).copy_from_slice(&(pvf.memory.1 as u64).to_le_bytes()[..]);
 
 		for (idx, chunk) in pvf.data_chunks.iter().enumerate() {
 			let chunk_offset = offset_by(membase - memaddr, pvf.offset_map.data_chunk(idx as u32));

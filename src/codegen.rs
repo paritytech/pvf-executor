@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 use crate::ir::{Ir, IrLabel, IrSignature, IrTable, IrDataChunk};
 
+pub(crate) const VM_DATA_TMP_0: i32 = 0x0000;
+pub(crate) const VM_DATA_MEM_ALLOC: i32 = 0x0100;
+pub(crate) const VM_DATA_MEM_TOTAL: i32 = 0x0108;
+
 pub enum Relocation {
 	MemoryAbsolute64,
 	FunctionAbsoluteAddress,

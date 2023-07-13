@@ -46,8 +46,8 @@ pub enum IrCp {
     SignExtend(IrOperand),
     Compare(IrOperand, IrOperand),
     SetIf(IrCond, IrOperand),
-    CheckIfZero(IrOperand),
-    Select(IrOperand, IrOperand, IrOperand, IrOperand),
+    CheckIfZero(IrOperand), // FIXME: Can be represented with IR
+    Select(IrOperand, IrOperand, IrOperand, IrOperand), // FIXME: Can be represented with IR
     Add(IrOperand, IrOperand),
     Subtract(IrOperand, IrOperand),
     Multiply(IrOperand, IrOperand),

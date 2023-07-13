@@ -135,6 +135,31 @@ impl CodeGenerator for IntelX64Compiler {
 			($($e:expr),*) => { { $(code.emit($e));* } }
 		}
 
+		macro_rules! emit_with_offset {
+			($($e:expr),* ; $modrm:expr, $offset:expr) => {
+				{
+					emit!($($e),*);
+					if $offset < i8::MIN as i32 || $offset > i8::MAX as i32 {
+						emit!(MOD_DISP32 | $modrm);
+						code.emit_imm32_le($offset);
+					} else {
+						emit!(MOD_DISP8 | $modrm, $offset as u8);
+					}
+				}
+			};
+			($($e:expr),* ; $modrm:expr, $sib:expr, $offset:expr) => {
+				{
+					emit!($($e),*);
+					if $offset < i8::MIN as i32 || $offset > i8::MAX as i32 {
+						emit!(MOD_DISP32 | $modrm, $sib);
+						code.emit_imm32_le($offset);
+					} else {
+						emit!(MOD_DISP8 | $modrm, $sib, $offset as u8);
+					}
+				}
+			}
+		}
+
 		macro_rules! emit_maybe_rexw {
 			($rexw:expr, $($e:expr),*) => {
 				{
@@ -186,11 +211,10 @@ impl CodeGenerator for IntelX64Compiler {
 							// - r15 (in preamble)
 							// - rbx (by `Ir` control flow code)
 							// - rbp (by `Ir` control flow code)
-							let mut caller_frame_off = 5u8 * 8;
+							let mut caller_frame_off = 5i32 * 8;
 
 							for _ in 0..n_stack_params {
-								// FIXME: Long offsets
-								emit!(REX_W, 0x8b, MOD_DISP8 | native_reg(&Ffp), caller_frame_off); // mov rax, [ffp+off]
+								emit_with_offset!(REX_W, 0x8b ; native_reg(&Ffp), caller_frame_off); // mov rax, [ffp+off]
 								emit!(0x50 | AX); // push rax
 								caller_frame_off += 8;
 							}
@@ -249,12 +273,12 @@ impl CodeGenerator for IntelX64Compiler {
 							}
 						},
 						(Reg(rdest), Global(index)) => {
-							let offset = offset_map.globals() + *index as i32 * 8; // FIXME: Account tables
+							let offset = offset_map.globals() + *index as i32 * 8;
 							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | R15); // mov <rdest>, [r15+<offset>]
 							code.emit_imm32_le(offset);
 						},
 						(Global(index), Reg(rsrc)) => {
-							let offset = offset_map.globals() + *index as i32 * 8; // FIXME: Account tables
+							let offset = offset_map.globals() + *index as i32 * 8;
 							emit!(REX_W | REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | R15); // mov [r15+<offset>], <rsrc>
 							code.emit_imm32_le(offset);
 						},
@@ -541,10 +565,9 @@ impl CodeGenerator for IntelX64Compiler {
 					let n_params = signature.params;
 					let n_stack_params = (n_params as usize).saturating_sub(ABI_PARAM_REGS.len());
 					if n_params > 0 {
-						let mut sp_off = 8 * (n_params as i8 - 1);
+						let mut sp_off = 8 * (n_params as i32 - 1);
 						for i in 0..std::cmp::min(n_params as usize, ABI_PARAM_REGS.len()) {
-							// FIXME: With MOD_DISP8, it's max. 16 arguments per function
-							emit!(REX_W | ABI_PARAM_REGS[i].0, 0x8b, MOD_DISP8 | ABI_PARAM_REGS[i].1 << 3 | SP, SIB1 | SP << 3 | SP, sp_off as u8); // mov reg, [rsp + sp_off]
+							emit_with_offset!(REX_W | ABI_PARAM_REGS[i].0, 0x8b ; ABI_PARAM_REGS[i].1 << 3 | SP, SIB1 | SP << 3 | SP, sp_off); // mov reg, [rsp + sp_off]
 							sp_off -= 8;
 						}
 						if n_stack_params > 0 {
@@ -556,12 +579,17 @@ impl CodeGenerator for IntelX64Compiler {
 							// store the current rsp and rbp values into the space freed up after
 							// populating registers with arguments to be able to get rid of the whole frame
 							// when the call is returned.
-							// FIXME: DISP8
-							emit!(REX_W, 0x89, MOD_DISP8 | SP << 3 | AX, n_stack_params as u8 * 8); // mov [rax + stored_sp_off], rsp
-							emit!(REX_W, 0x89, MOD_DISP8 | BP << 3 | AX, (n_stack_params + 1) as u8 * 8); // mov [rax + stored_bp_off], rbp
+							emit_with_offset!(REX_W, 0x89 ; SP << 3 | AX, n_stack_params as i32 * 8); // mov [rax + stored_sp_off], rsp
+							emit_with_offset!(REX_W, 0x89 ; BP << 3 | AX, (n_stack_params + 1) as i32 * 8); // mov [rax + stored_bp_off], rbp
 							emit!(REX_W, 0x89, MOD_REG | AX << 3 | BP); // mov rbp, rax
 							emit!(REX_W | REX_B, 0x89, MOD_REG | BP << 3 | R11); // mov r11, rbp
-							emit!(REX_W | REX_B, 0x83, MOD_REG | 0x0 << 3 | R11, (n_stack_params - 1) as u8 * 8); // add r11, (nsp-1)*8
+							let frame_off = (n_stack_params as i32 - 1) * 8;
+							if frame_off > i8::MAX as i32 { // add r11, (nsp-1)*8
+								emit!(REX_W | REX_B, 0x81, MOD_REG | 0x0 << 3 | R11);
+								code.emit_imm32_le(frame_off);
+							} else {
+								emit!(REX_W | REX_B, 0x83, MOD_REG | 0x0 << 3 | R11, frame_off as u8);
+							}
 							// l1:
 							emit!(0x58 | AX); // pop rax
 							emit!(REX_W | REX_B, 0x89, MOD_RM | AX << 3 | R11); // mov [r11], rax
@@ -618,8 +646,8 @@ impl CodeGenerator for IntelX64Compiler {
 						if n_stack_params > 0 {
 							// rsp points to the bottom of the ABI frame. Offsets to the stored
 							// rsp and rbp values are known
-							emit!(REX_W, 0x8b, MOD_DISP8 | BP << 3 | SP, SIB1 | SP << 3 | SP, (n_stack_params + 1) as u8 * 8); // mov rbp, [rsp + storeb_bp_off]
-							emit!(REX_W, 0x8b, MOD_DISP8 | SP << 3 | SP, SIB1 | SP << 3 | SP, n_stack_params as u8 * 8); // mov rsp, [rsp + storeb_sp_off]
+							emit_with_offset!(REX_W, 0x8b ; BP << 3 | SP, SIB1 | SP << 3 | SP, (n_stack_params + 1) as i32 * 8); // mov rbp, [rsp + storeb_bp_off]
+							emit_with_offset!(REX_W, 0x8b ; SP << 3 | SP, SIB1 | SP << 3 | SP, n_stack_params as i32 * 8); // mov rsp, [rsp + storeb_sp_off]
 						} else {
 							emit!(REX_W | REX_R, 0x89, MOD_REG | R12 << 3 | SP); // mov rsp, r12
 						}

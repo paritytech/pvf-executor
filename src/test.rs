@@ -484,26 +484,27 @@ fn call() {
 		),
 		42
 	);
-	// FIXME: This requires long offset fixes
-	// assert_eq!(
-	// 	test::<_, i32>(wat(r#"
-	// 		(module
-	// 			(func $param20 (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32) 
-	// 				(i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (local.get 0) (local.get 1))
-	// 				(local.get 2)) (local.get 3)) (local.get 4)) (local.get 5)) (local.get 6)) (local.get 7)) (local.get 8)) (local.get 9))	(local.get 10)) (local.get 11)) (local.get 12)) (local.get 13)) (local.get 14)) (local.get 15)) (local.get 16))
-	// 				(local.get 17)) (local.get 18)) (local.get 19))
-	// 			)
-	// 			(func (export "test") (result i32)
-	// 				(i32.add (call $param20 (i32.const 1) (i32.const 10) (i32.const 15) (i32.const 22) (i32.const 13) (i32.const 32) (i32.const 54) (i32.const 100) (i32.const 48)
-	// 				(i32.const 9) (i32.const 54) (i32.const 88) (i32.const 65) (i32.const 115) (i32.const 87) (i32.const 2) (i32.const 91) (i32.const 14) (i32.const 63) (i32.const 138) (i32.const 9) 
-	// 				) 
-	// 				(i32.const 10))
-	// 			)
-	// 		)"#),
-	// 		()
-	// 	),
-	// 	42
-	// );
+
+	assert_eq!(
+		test::<_, i32>(wat(r#"
+			(module
+				(func $param20 (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)
+					(i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add (i32.sub (i32.add
+						(local.get 0) (local.get 1)) (local.get 2)) (local.get 3)) (local.get 4)) (local.get 5)) (local.get 6)) (local.get 7)) (local.get 8)) (local.get 9))
+						(local.get 10)) (local.get 11)) (local.get 12)) (local.get 13)) (local.get 14)) (local.get 15)) (local.get 16)) (local.get 17)) (local.get 18)) (local.get 19))
+				)
+				(func (export "test") (result i32)
+					(i32.add
+						(call $param20 (i32.const 1) (i32.const 10) (i32.const 15) (i32.const 22) (i32.const 13) (i32.const 32) (i32.const 54) (i32.const 100) (i32.const 48) (i32.const 9)
+							(i32.const 54) (i32.const 88) (i32.const 65) (i32.const 115) (i32.const 87) (i32.const 2) (i32.const 91) (i32.const 14) (i32.const 63) (i32.const 138))
+						(i32.const 1)
+					)
+				)
+			)"#),
+			()
+		),
+		42
+	);
 }
 
 #[test]

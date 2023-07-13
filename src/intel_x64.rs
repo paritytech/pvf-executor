@@ -102,16 +102,13 @@ const fn native_reg(r: &IrReg) -> u8 {
 		Sra => AX,
 		Src => CX,
 		Srd => DX,
-		Ffp => BX,
-		Bfp => BP,
-		Stp => SP,
-		// _ => todo!(),
 	}
 }
 
 const fn native_cond(cond: &IrCond) -> u8 {
 	match cond {
 		Zero => 0x04,
+		NotZero => 0x05,
 		Equal => 0x04,
 		NotEqual => 0x05,
 		LessSigned => 0x0c,
@@ -124,8 +121,6 @@ const fn native_cond(cond: &IrCond) -> u8 {
 		GreaterOrEqualUnsigned => 0x03,
 	}
 }
-
-const fn ffp() -> u8 { native_reg(&Ffp) }
 
 struct JmpTarget(usize, IrLabel);
 
@@ -178,15 +173,20 @@ impl CodeGenerator for IntelX64Compiler {
 		for insn in body.code() {
 			match insn {
 				Label(label) => code.label(label.clone()),
-				Preamble => {
+				EnterFunction(n_locals) => {
 					emit!(REX_B, 0x50 | R12); // push r12
 					emit!(REX_B, 0x50 | R15); // push r15
 
 					emit!(REX_W | REX_B, 0xb8 | R15); // movabs r15, imm64
 					code.reloc(Relocation::MemoryAbsolute64);
 					code.emit_imm64_le(0);
-				}
-				InitLocals(n_locals) => {
+
+					emit!(0x50 | BX); // push rbx
+					emit!(0x50 | BP); // push rbp
+
+					emit!(REX_W, 0x89, MOD_REG | SP << 3 | BX); // mov rbx, rsp
+					emit!(REX_W, 0x89, MOD_REG | SP << 3 | BP); // mov rbp, rsp
+
 					let n_params = self_signature.params;
 					let n_total = n_locals + n_params;
 
@@ -214,7 +214,7 @@ impl CodeGenerator for IntelX64Compiler {
 							let mut caller_frame_off = 5i32 * 8;
 
 							for _ in 0..n_stack_params {
-								emit_with_offset!(REX_W, 0x8b ; native_reg(&Ffp), caller_frame_off); // mov rax, [ffp+off]
+								emit_with_offset!(REX_W, 0x8b ; AX << 3 | BX, caller_frame_off); // mov rax, [rbx+off]
 								emit!(0x50 | AX); // push rax
 								caller_frame_off += 8;
 							}
@@ -229,7 +229,22 @@ impl CodeGenerator for IntelX64Compiler {
 							}
 						}
 					}
-				},
+				}
+				LeaveFunction => {
+					emit!(REX_W, 0x89, MOD_REG | BX << 3 | SP); // mov rsp, rbx
+					emit!(0x58 | BP); // pop rbp
+					emit!(0x58 | BX); // pop rbx
+					emit!(REX_B, 0x58 | R15); // pop r15
+					emit!(REX_B, 0x58 | R12); // pop r12
+				}
+				EnterBlock => {
+					emit!(0x50 | BP); // push rbp
+					emit!(REX_W, 0x89, MOD_REG | SP << 3 | BP); // mov rbp, rsp
+				}
+				LeaveBlock => {
+					emit!(REX_W, 0x89, MOD_REG | BP << 3 | SP); // mov rsp, rbp
+					emit!(0x58 | BP); // pop rbp
+				}
 				Push(op) => {
 					match op {
 						Reg(r) => emit!(0x50 | native_reg(r)), // push <reg>
@@ -266,9 +281,9 @@ impl CodeGenerator for IntelX64Compiler {
 						(Reg(rdest), Local(index)) => {
 							// mov <dreg>, [ffp-local_off]
 							if *index < 15 {
-								emit!(REX_W, 0x8b, MOD_DISP8 | native_reg(rdest) << 3 | ffp(), -((*index as i8 + 1) * 8) as u8);
+								emit!(REX_W, 0x8b, MOD_DISP8 | native_reg(rdest) << 3 | BX, -((*index as i8 + 1) * 8) as u8);
 							} else {
-								emit!(REX_W, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | ffp());
+								emit!(REX_W, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | BX);
 								code.emit_imm32_le(-(*index as i32 + 1) * 8);
 							}
 						},
@@ -285,9 +300,9 @@ impl CodeGenerator for IntelX64Compiler {
 						(Local(index), Reg(rsrc)) => {
 							// mov [ffp-local_off], <sreg>
 							if *index < 15 {
-								emit!(REX_W, 0x89, MOD_DISP8 | native_reg(rsrc) << 3 | ffp(), -((*index as i8 + 1) * 8) as u8);
+								emit!(REX_W, 0x89, MOD_DISP8 | native_reg(rsrc) << 3 | BX, -((*index as i8 + 1) * 8) as u8);
 							} else {
-								emit!(REX_W, 0x8b, MOD_DISP32 | native_reg(rsrc) << 3 | ffp());
+								emit!(REX_W, 0x8b, MOD_DISP32 | native_reg(rsrc) << 3 | BX);
 								code.emit_imm32_le(-(*index as i32 + 1) * 8);
 							}
 						},
@@ -329,8 +344,8 @@ impl CodeGenerator for IntelX64Compiler {
 				},
 				MoveIf(cond, dest, src) => {
 					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => {
-							emit!(0x0f, 0x40 | native_cond(cond), MOD_REG | native_reg(rdest) << 3 | native_reg(rsrc)); // cmovcc <rdest32>, <rsrc32>
+						(Reg(rdest), Reg(rsrc)) | (Reg32(rdest), Reg32(rsrc)) => {
+							emit_maybe_rexw!(matches!(dest, Reg(_)), 0x0f, 0x40 | native_cond(cond), MOD_REG | native_reg(rdest) << 3 | native_reg(rsrc)); // cmovcc <rdest32>, <rsrc32>
 						},
 						_ => todo!()
 					}
@@ -447,19 +462,6 @@ impl CodeGenerator for IntelX64Compiler {
 						_ => unreachable!()
 					}
 				}
-				CheckIfZero(src) => {
-					match src {
-						Reg(rsrc) | Reg32(rsrc) => {
-							if matches!(src, Reg(_)) {
-								emit!(REX_W)
-							}
-							emit!(0x85, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // test <sreg[32]>, <sreg[32]>
-							emit!(0x0f, 0x94 | native_cond(&Zero), MOD_REG | native_reg(rsrc)); // setz <sreg8>
-							emit!(0x0f, 0xb6, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // movzx <sreg32>, <sreg8>
-						},
-						_ => unreachable!()
-					}
-				},
 				And(dest, src) => {
 					match (dest, src) {
 						(Reg32(rdest), Reg32(rsrc)) => emit!(0x21, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // and <dreg32>, <sreg32>
@@ -660,27 +662,11 @@ impl CodeGenerator for IntelX64Compiler {
 					}
 
 				},
-				Postamble => {
-					emit!(REX_B, 0x58 | R15); // pop r15
-					emit!(REX_B, 0x58 | R12); // pop r12
-				}
 				Return => {
 					emit!(0xc3); // ret near
 				}
 				Trap => {
 					emit!(0x0f, 0x0b); // ud2
-				}
-				Select(check, if_zero, if_not_zero, result) => {
-					match (check, if_zero, if_not_zero, result) {
-						(Reg32(check_reg), Reg(if_zero_reg), Reg(if_not_zero_reg), Reg(result_reg)) => {
-							if result_reg != if_zero_reg {
-								emit!(REX_W, 0x89, MOD_REG | native_reg(if_zero_reg) << 3 | native_reg(result_reg)); // mov <rres>, <rifz>
-							}
-							emit!(0x85, MOD_REG | native_reg(check_reg) << 3 | native_reg(check_reg)); // test <rcheck>, <rcheck>
-							emit!(REX_W, 0x0f, 0x45, MOD_REG | native_reg(result_reg) << 3 | native_reg(if_not_zero_reg)); // cmovne <rres>, <rifnz>
-						},
-						_ => unreachable!()
-					}
 				}
 				LeadingZeroes(src) => {
 					match src {

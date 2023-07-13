@@ -120,8 +120,7 @@ impl RawPvf {
 					println!("FUNCTYPES {:?}", functypes);
 					let init_index = functypes.len();
 					init_ir.label(IrLabel::ExportedFunc(init_index as u32, "_pvf_init".to_owned()));
-					init_ir.preamble();
-					init_ir.init_locals(0);
+					init_ir.enter_function(0);
 				},
 				Payload::MemorySection(reader) => {
 					hints.has_memory = true;
@@ -215,12 +214,7 @@ impl RawPvf {
 							IrLabel::AnonymousFunc(findex)
 						}
 					);
-					ir.preamble();
-					ir.push(Reg(Ffp));
-					ir.push(Reg(Bfp));
-					ir.r#move(Reg(Ffp), Reg(Stp));
-					ir.r#move(Reg(Bfp), Reg(Stp));
-					ir.init_locals(n_locals);
+					ir.enter_function(n_locals);
 
 					while !reader.eof() {
 						let op = reader.read()?;
@@ -257,8 +251,18 @@ impl RawPvf {
 							Op::I64LeU => impl_compare!(LessOrEqualUnsigned, Reg, Sra, Srd),
 							Op::I64GeS => impl_compare!(GreaterOrEqualSigned, Reg, Sra, Srd),
 							Op::I64GeU => impl_compare!(GreaterOrEqualUnsigned, Reg, Sra, Srd),
-							Op::I32Eqz => impl_unary!(Reg32, Sra, check_if_zero),
-							Op::I64Eqz => impl_unary!(Reg, Sra, check_if_zero),
+							Op::I32Eqz => {
+								ir.pop(Reg(Sra));
+								ir.and(Reg32(Sra), Reg32(Sra));
+								ir.set_if(Zero, Reg32(Sra));
+								ir.push(Reg(Sra));
+							}
+							Op::I64Eqz => {
+								ir.pop(Reg(Sra));
+								ir.and(Reg(Sra), Reg(Sra));
+								ir.set_if(Zero, Reg32(Sra));
+								ir.push(Reg(Sra));
+							}
 							Op::I32And => impl_comm_binary!(Reg32, Sra, Srd, and),
 							Op::I32Or => impl_comm_binary!(Reg32, Sra, Srd, or),
 							Op::I32Xor => impl_comm_binary!(Reg32, Sra, Srd, xor),
@@ -273,8 +277,7 @@ impl RawPvf {
 									BlockType::FuncType(_) => todo!(),
 								};
 								cstack.push(ControlFrame { cftype: ControlFrameType::Block, block_index: self.block_index, has_retval });
-								ir.push(Reg(Bfp));
-								ir.r#move(Reg(Bfp), Reg(Stp));
+								ir.enter_block();
 							},
 							Op::Loop { blockty } => {
 								self.block_index += 1;
@@ -284,8 +287,7 @@ impl RawPvf {
 									BlockType::FuncType(_) => todo!(),
 								};
 								cstack.push(ControlFrame { cftype: ControlFrameType::Loop, block_index: self.block_index, has_retval });
-								ir.push(Reg(Bfp));
-								ir.r#move(Reg(Bfp), Reg(Stp));
+								ir.enter_block();
 								ir.label(IrLabel::BranchTarget(self.block_index));
 							},
 							Op::Br { relative_depth } | Op::BrIf { relative_depth } => {
@@ -304,8 +306,7 @@ impl RawPvf {
 									ir.pop(Reg(Sra));
 								}
 								for _ in 0..relative_depth {
-									ir.r#move(Reg(Stp), Reg(Bfp));
-									ir.pop(Reg(Bfp));
+									ir.leave_block();
 								}
 								ir.jump(IrLabel::BranchTarget(target_frame.block_index));
 
@@ -317,10 +318,10 @@ impl RawPvf {
 								let default_frame = &cstack[cstack.len() - targets.default() as usize - 1];
 								let mut br_targets = targets.targets().collect::<Result<Vec<_>, _>>()?;
 								br_targets.push(targets.default());
-								ir.pop(Reg(Src)); // Branch target index
-								ir.r#move(Reg32(Srd), Imm32(br_targets.len() as i32 - 1));
-								ir.compare(Reg32(Src), Reg32(Srd));
-								ir.move_if(GreaterUnsigned, Reg32(Src), Reg32(Srd));
+								ir.pop(Reg(Srd)); // Branch target index
+								ir.r#move(Reg32(Sra), Imm32(br_targets.len() as i32 - 1));
+								ir.compare(Reg32(Srd), Reg32(Sra));
+								ir.move_if(GreaterUnsigned, Reg32(Srd), Reg32(Sra));
 
 								if default_frame.has_retval {
 									ir.pop(Reg(Sra));
@@ -332,14 +333,13 @@ impl RawPvf {
 									local_label_index += 1;
 								}
 
-								ir.jump_table(Reg32(Src), exit_labels.clone());
+								ir.jump_table(Reg32(Srd), exit_labels.clone());
 
 								for (i, target) in br_targets.iter().enumerate() {
 									let frame = &cstack[cstack.len() - *target as usize - 1];
 									ir.label(exit_labels[i].clone());
 									for _ in 0..*target {
-										ir.r#move(Reg(Stp), Reg(Bfp));
-										ir.pop(Reg(Bfp));
+										ir.leave_block();
 									}
 									ir.jump(IrLabel::BranchTarget(frame.block_index));
 								}
@@ -351,10 +351,7 @@ impl RawPvf {
 											if ftype.results().len() > 0 {
 												ir.pop(Reg(Sra));
 											}
-											ir.r#move(Reg(Stp), Reg(Ffp));
-											ir.pop(Reg(Bfp));
-											ir.pop(Reg(Ffp));
-											ir.postamble();
+											ir.leave_function();
 											ir.r#return();
 										},
 										ControlFrameType::Block | ControlFrameType::Loop => {
@@ -364,8 +361,7 @@ impl RawPvf {
 											if matches!(frame.cftype, ControlFrameType::Block) {
 												ir.label(IrLabel::BranchTarget(frame.block_index));
 											}
-											ir.r#move(Reg(Stp), Reg(Bfp));
-											ir.pop(Reg(Bfp));
+											ir.leave_block();
 											if frame.has_retval {
 												ir.push(Reg(Sra));
 											}
@@ -503,10 +499,7 @@ impl RawPvf {
 								if ftype.results().len() > 0 {
 									ir.pop(Reg(Sra));
 								}
-								ir.r#move(Reg(Stp), Reg(Ffp));
-								ir.pop(Reg(Bfp));
-								ir.pop(Reg(Ffp));
-								ir.postamble();
+								ir.leave_function();
 								ir.r#return();
 							},
 							Op::CallIndirect { type_index, table_index, table_byte } => {
@@ -520,10 +513,11 @@ impl RawPvf {
 								ir.pop(Reg(Sra));
 							},
 							Op::Select => {
-								ir.pop(Reg(Src));
+								ir.pop(Reg(Sra));
+								ir.and(Reg(Sra), Reg(Sra));
 								ir.pop(Reg(Sra));
 								ir.pop(Reg(Srd));
-								ir.select(Reg32(Src), Reg(Sra), Reg(Srd), Reg(Sra));
+								ir.move_if(NotZero, Reg(Sra), Reg(Srd));
 								ir.push(Reg(Sra));
 							},
 							Op::MemorySize { mem: _, mem_byte } => {
@@ -656,13 +650,10 @@ impl RawPvf {
 				Payload::CustomSection(_) => (),
 				Payload::UnknownSection { id, contents, range } => todo!(),
 				Payload::End(_) => (), // FIXME
-				// _other => {
-				// 	println!("STUB: Section {:?}", _other);
-				// }
 			}
 		}
 
-		init_ir.postamble();
+		init_ir.leave_function();
 		init_ir.r#return();
 		ir_pvf.add_func(findex, init_ir, IrSignature { params: 0, results: 0 });
 

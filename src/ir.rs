@@ -7,9 +7,6 @@ pub enum IrReg {
     Sra,
     Src,
     Srd,
-    Bfp,
-    Ffp,
-    Stp,
 }
 
 #[derive(Debug, Clone)]
@@ -32,8 +29,10 @@ pub enum IrOperand {
 #[derive(Debug, Clone)]
 pub enum IrCp {
     Label(IrLabel),
-    Preamble,
-    InitLocals(u32),
+    EnterFunction(u32),
+    LeaveFunction,
+    EnterBlock,
+    LeaveBlock,
     InitTablePreamble(IrOperand),
     InitTableElement(IrOperand),
     InitTablePostamble,
@@ -46,8 +45,6 @@ pub enum IrCp {
     SignExtend(IrOperand),
     Compare(IrOperand, IrOperand),
     SetIf(IrCond, IrOperand),
-    CheckIfZero(IrOperand), // FIXME: Can be represented with IR
-    Select(IrOperand, IrOperand, IrOperand, IrOperand), // FIXME: Can be represented with IR
     Add(IrOperand, IrOperand),
     Subtract(IrOperand, IrOperand),
     Multiply(IrOperand, IrOperand),
@@ -72,7 +69,6 @@ pub enum IrCp {
     Call(IrLabel),
     MemoryGrow(IrOperand),
     MemorySize(IrOperand),
-    Postamble,
     Return,
     Trap,
 }
@@ -90,6 +86,7 @@ pub enum IrLabel {
 #[derive(Debug, Clone)]
 pub enum IrCond {
     Zero,
+    NotZero,
     Equal,
     NotEqual,
     LessSigned,
@@ -122,12 +119,20 @@ impl Ir {
         self.0.push(IrCp::Label(l));
     }
 
-    pub fn preamble(&mut self) {
-    	self.0.push(IrCp::Preamble);
+    pub fn enter_function(&mut self, n_locals: u32) {
+        self.0.push(IrCp::EnterFunction(n_locals));
     }
 
-    pub fn init_locals(&mut self, n_locals: u32) {
-        self.0.push(IrCp::InitLocals(n_locals));
+    pub fn leave_function(&mut self) {
+        self.0.push(IrCp::LeaveFunction);
+    }
+
+    pub fn enter_block(&mut self) {
+        self.0.push(IrCp::EnterBlock);
+    }
+
+    pub fn leave_block(&mut self) {
+        self.0.push(IrCp::LeaveBlock);
     }
 
     pub fn init_table_preamble(&mut self, offset_reg: IrOperand) {
@@ -206,14 +211,6 @@ impl Ir {
         self.0.push(IrCp::SetIf(cond, dest));
     }
 
-    pub fn check_if_zero(&mut self, op: IrOperand) {
-    	self.0.push(IrCp::CheckIfZero(op));
-    }
-
-    pub fn select(&mut self, check: IrOperand, if_zero: IrOperand, if_not_zero: IrOperand, result: IrOperand) {
-    	self.0.push(IrCp::Select(check, if_zero, if_not_zero, result));
-    }
-
     pub fn and(&mut self, dest: IrOperand, src: IrOperand) {
         self.0.push(IrCp::And(dest, src));
     }
@@ -284,10 +281,6 @@ impl Ir {
 
     pub fn memory_size(&mut self, dest: IrOperand) {
         self.0.push(IrCp::MemorySize(dest));
-    }
-
-    pub fn postamble(&mut self) {
-    	self.0.push(IrCp::Postamble);
     }
 
     pub fn r#return(&mut self) {

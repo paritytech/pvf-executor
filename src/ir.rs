@@ -1,6 +1,6 @@
 use crate::{CodeGenerator, codegen::CodeEmitter, PreparedPvf};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 #[derive(Eq)]
 #[derive(Hash)]
 pub enum IrReg {
@@ -390,6 +390,35 @@ impl IrPvf {
 
     pub(crate) fn set_hints(&mut self, hints: IrHints) {
     	self.hints = hints;
+    }
+
+    pub fn optimize(&mut self) {
+        for maybe_ir in self.funcs.iter_mut() {
+            if let Some(IrFunc::Function(ref mut ir)) = maybe_ir {
+                if ir.0.len() == 0 {
+                    continue;
+                }
+                let mut opt = Vec::new();
+                let mut pc = 0;
+                while pc < ir.0.len() - 1 {
+                    match (&ir.0[pc], &ir.0[pc + 1]) {
+                        (IrCp::Push(IrOperand::Reg(push_reg)), IrCp::Pop(IrOperand::Reg(pop_reg))) => {
+                            if push_reg != pop_reg {
+                                opt.push(IrCp::Move(IrOperand::Reg(*pop_reg), IrOperand::Reg(*push_reg)));
+                            }
+                            pc += 2;
+                        },
+                        _ => {
+                            opt.push(ir.0[pc].clone());
+                            pc += 1;
+                        }
+                    }
+                }
+                opt.push(ir.0[pc].clone());
+                ir.0 = opt;
+            }
+        }
+        println!("OPT IR: {:?}", self);
     }
 
     pub fn compile(self, codegen: &mut dyn CodeGenerator) -> PreparedPvf {

@@ -31,25 +31,22 @@ use crate::{CodeGenerator, codegen::{self, CodeEmitter, Relocation, OffsetMap}, 
 pub struct IntelX64Compiler {
 	call_targets: Vec<LinkTarget>,
 	abs_off_targets: Vec<LinkTarget>,
-	// table_map: Vec<isize>,
+	map_sra: u8,
+	map_src: u8,
+	map_srd: u8,
 }
 
 impl IntelX64Compiler {
-	// pub fn new(tables: &Vec<u32>) -> Self {
-	// 	let mut table_map = Vec::new();
-	// 	for table_size in tables {
-	// 		let table_pages = 1 + table_size * 8 / 0x10000;
-	// 		table_map.push(-0x20000isize - table_pages as isize * 0x10000)
-	// 	}
-	// 	Self { call_targets: Vec::new(), table_map }
-	// }
 	pub fn new() -> Self {
-		// let mut table_map = Vec::new();
-		// for table_size in tables {
-		// 	let table_pages = 1 + table_size * 8 / 0x10000;
-		// 	table_map.push(-0x20000isize - table_pages as isize * 0x10000)
-		// }
-		Self { call_targets: Vec::new(), abs_off_targets: Vec::new() }
+		Self { call_targets: Vec::new(), abs_off_targets: Vec::new(), map_sra: AX, map_src: CX, map_srd: DX }
+	}
+
+	fn reg(&self, r: &IrReg) -> u8 {
+		match r {
+			Sra => self.map_sra,
+			Src => self.map_src,
+			Srd => self.map_srd,
+		}
 	}
 }
 
@@ -97,14 +94,6 @@ const REP: u8 = 0xf3;
 
 const ABI_PARAM_REGS: [(u8, u8); 6] = [(0, DI), (0, SI), (0, DX), (0, CX), (REX_R, R8), (REX_R, R9)];
 
-const fn native_reg(r: &IrReg) -> u8 {
-	match r {
-		Sra => AX,
-		Src => CX,
-		Srd => DX,
-	}
-}
-
 const fn native_cond(cond: &IrCond) -> u8 {
 	match cond {
 		Zero => 0x04,
@@ -131,25 +120,14 @@ impl CodeGenerator for IntelX64Compiler {
 		}
 
 		macro_rules! emit_with_offset {
-			($($e:expr),* ; $modrm:expr, $offset:expr) => {
+			($($e:expr),* ; $modrm:expr $(, $sib:expr)? ; $offset:expr) => {
 				{
 					emit!($($e),*);
 					if $offset < i8::MIN as i32 || $offset > i8::MAX as i32 {
-						emit!(MOD_DISP32 | $modrm);
+						emit!(MOD_DISP32 | $modrm $(, $sib)?);
 						code.emit_imm32_le($offset);
 					} else {
-						emit!(MOD_DISP8 | $modrm, $offset as u8);
-					}
-				}
-			};
-			($($e:expr),* ; $modrm:expr, $sib:expr, $offset:expr) => {
-				{
-					emit!($($e),*);
-					if $offset < i8::MIN as i32 || $offset > i8::MAX as i32 {
-						emit!(MOD_DISP32 | $modrm, $sib);
-						code.emit_imm32_le($offset);
-					} else {
-						emit!(MOD_DISP8 | $modrm, $sib, $offset as u8);
+						emit!(MOD_DISP8 | $modrm $(, $sib)?, $offset as u8);
 					}
 				}
 			}
@@ -205,16 +183,16 @@ impl CodeGenerator for IntelX64Compiler {
 						}
 
 						if n_stack_params > 0 {
-							// After the last off-stack argument, there were pushed:
+							// After the last on-stack argument, there were pushed:
 							// - return address (by `call`)
-							// - r12 (in preamble)
-							// - r15 (in preamble)
-							// - rbx (by `Ir` control flow code)
-							// - rbp (by `Ir` control flow code)
+							// - r12 (in `EnterFunction`)
+							// - r15 (in `EnterFunction`)
+							// - rbx (in `EnterFunction`)
+							// - rbp (in `EnterFunction`)
 							let mut caller_frame_off = 5i32 * 8;
 
 							for _ in 0..n_stack_params {
-								emit_with_offset!(REX_W, 0x8b ; AX << 3 | BX, caller_frame_off); // mov rax, [rbx+off]
+								emit_with_offset!(REX_W, 0x8b ; AX << 3 | BX ; caller_frame_off); // mov rax, [rbx+off]
 								emit!(0x50 | AX); // push rax
 								caller_frame_off += 8;
 							}
@@ -247,13 +225,13 @@ impl CodeGenerator for IntelX64Compiler {
 				}
 				Push(op) => {
 					match op {
-						Reg(r) => emit!(0x50 | native_reg(r)), // push <reg>
+						Reg(r) => emit!(0x50 | self.reg(r)), // push <reg>
 						_ => unreachable!()
 					}
 				},
 				Pop(op) => {
 					match op {
-						Reg(r) => emit!(0x58 | native_reg(r)), // pop <reg>
+						Reg(r) => emit!(0x58 | self.reg(r)), // pop <reg>
 						_ => unreachable!()
 					}
 				},
@@ -261,82 +239,82 @@ impl CodeGenerator for IntelX64Compiler {
 					match (dest, src) {
 						(Reg(rdest), Reg(rsrc)) => {
 							// mov <dreg>, <sreg>
-							emit!(REX_W, 0x89, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest));
+							emit!(REX_W, 0x89, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest));
 						},
 						(Reg(rdest), Imm32(imm)) | (Reg32(rdest), Imm32(imm)) => {
 							// mov <dreg>, <imm32>
-							emit!(0xb8 | native_reg(rdest));
+							emit!(0xb8 | self.reg(rdest));
 							code.emit_imm32_le(*imm);
 						},
 						(Reg(rdest), Imm64(imm)) => {
 							// mov <dreg>, <imm64>
 							if *imm > 0 && *imm < u32::MAX as i64 {
-								emit!(0xb8 | native_reg(rdest)); // movabs <rdest32>, <imm32>
+								emit!(0xb8 | self.reg(rdest)); // movabs <rdest32>, <imm32>
 								code.emit_imm32_le(*imm as i32);
 							} else {
-								emit!(REX_W, 0xb8 | native_reg(rdest)); // movabs <rdest>, <imm64> 
+								emit!(REX_W, 0xb8 | self.reg(rdest)); // movabs <rdest>, <imm64> 
 								code.emit_imm64_le(*imm);
 							}
 						},
 						(Reg(rdest), Local(index)) => {
 							// mov <dreg>, [ffp-local_off]
 							if *index < 15 {
-								emit!(REX_W, 0x8b, MOD_DISP8 | native_reg(rdest) << 3 | BX, -((*index as i8 + 1) * 8) as u8);
+								emit!(REX_W, 0x8b, MOD_DISP8 | self.reg(rdest) << 3 | BX, -((*index as i8 + 1) * 8) as u8);
 							} else {
-								emit!(REX_W, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | BX);
+								emit!(REX_W, 0x8b, MOD_DISP32 | self.reg(rdest) << 3 | BX);
 								code.emit_imm32_le(-(*index as i32 + 1) * 8);
 							}
 						},
 						(Reg(rdest), Global(index)) => {
 							let offset = offset_map.globals() + *index as i32 * 8;
-							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | R15); // mov <rdest>, [r15+<offset>]
+							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | self.reg(rdest) << 3 | R15); // mov <rdest>, [r15+<offset>]
 							code.emit_imm32_le(offset);
 						},
 						(Global(index), Reg(rsrc)) => {
 							let offset = offset_map.globals() + *index as i32 * 8;
-							emit!(REX_W | REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | R15); // mov [r15+<offset>], <rsrc>
+							emit!(REX_W | REX_B, 0x89, MOD_DISP32 | self.reg(rsrc) << 3 | R15); // mov [r15+<offset>], <rsrc>
 							code.emit_imm32_le(offset);
 						},
 						(Local(index), Reg(rsrc)) => {
 							// mov [ffp-local_off], <sreg>
 							if *index < 15 {
-								emit!(REX_W, 0x89, MOD_DISP8 | native_reg(rsrc) << 3 | BX, -((*index as i8 + 1) * 8) as u8);
+								emit!(REX_W, 0x89, MOD_DISP8 | self.reg(rsrc) << 3 | BX, -((*index as i8 + 1) * 8) as u8);
 							} else {
-								emit!(REX_W, 0x8b, MOD_DISP32 | native_reg(rsrc) << 3 | BX);
+								emit!(REX_W, 0x8b, MOD_DISP32 | self.reg(rsrc) << 3 | BX);
 								code.emit_imm32_le(-(*index as i32 + 1) * 8);
 							}
 						},
 						// TODO: Optimize for zero offset and short offsets
 						(Memory8(offset, raddr), Reg8(rsrc)) => {
-							emit!(REX_B, 0x88, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc8>
+							emit!(REX_B, 0x88, MOD_DISP32 | self.reg(rsrc) << 3 | MOD_SIB, SIB1 | self.reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc8>
 							code.emit_imm32_le(*offset);
 						},
 						(Memory16(offset, raddr), Reg16(rsrc)) => {
-							emit!(OPER_SIZE_OVR, REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc16>
+							emit!(OPER_SIZE_OVR, REX_B, 0x89, MOD_DISP32 | self.reg(rsrc) << 3 | MOD_SIB, SIB1 | self.reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc16>
 							code.emit_imm32_le(*offset);
 						},
 						(Memory32(offset, raddr), Reg32(rsrc)) => {
-							emit!(REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc32>
+							emit!(REX_B, 0x89, MOD_DISP32 | self.reg(rsrc) << 3 | MOD_SIB, SIB1 | self.reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc32>
 							code.emit_imm32_le(*offset);
 						},
 						(Memory64(offset, raddr), Reg(rsrc)) => {
-							emit!(REX_W | REX_B, 0x89, MOD_DISP32 | native_reg(rsrc) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc>
+							emit!(REX_W | REX_B, 0x89, MOD_DISP32 | self.reg(rsrc) << 3 | MOD_SIB, SIB1 | self.reg(raddr) << 3 | R15); // mov [r15+<raddr>*1+<offset>], <rsrc>
 							code.emit_imm32_le(*offset);
 						},
 						(Reg8(rdest), Memory8(offset, raddr)) => {
-							emit!(REX_B, 0x8a, MOD_DISP32 | native_reg(rdest) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov <rdest8>, [r15+<raddr>*1+offset]
+							emit!(REX_B, 0x8a, MOD_DISP32 | self.reg(rdest) << 3 | MOD_SIB, SIB1 | self.reg(raddr) << 3 | R15); // mov <rdest8>, [r15+<raddr>*1+offset]
 							code.emit_imm32_le(*offset);
 						}
 						(Reg16(rdest), Memory16(offset, raddr)) => {
-							emit!(OPER_SIZE_OVR, REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov <rdest16>, [r15+<raddr>*1+offset]
+							emit!(OPER_SIZE_OVR, REX_B, 0x8b, MOD_DISP32 | self.reg(rdest) << 3 | MOD_SIB, SIB1 | self.reg(raddr) << 3 | R15); // mov <rdest16>, [r15+<raddr>*1+offset]
 							code.emit_imm32_le(*offset);
 						}
 						(Reg32(rdest), Memory32(offset, raddr)) => {
-							emit!(REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov <rdest32>, [r15+<raddr>*1+offset]
+							emit!(REX_B, 0x8b, MOD_DISP32 | self.reg(rdest) << 3 | MOD_SIB, SIB1 | self.reg(raddr) << 3 | R15); // mov <rdest32>, [r15+<raddr>*1+offset]
 							code.emit_imm32_le(*offset);
 						}
 						(Reg(rdest), Memory64(offset, raddr)) => {
-							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | MOD_SIB, SIB1 | native_reg(raddr) << 3 | R15); // mov <rdest64>, [r15+<raddr>*1+offset]
+							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | self.reg(rdest) << 3 | MOD_SIB, SIB1 | self.reg(raddr) << 3 | R15); // mov <rdest64>, [r15+<raddr>*1+offset]
 							code.emit_imm32_le(*offset);
 						}
 						unk => todo!("ir Mov {:?}", unk),
@@ -345,16 +323,16 @@ impl CodeGenerator for IntelX64Compiler {
 				MoveIf(cond, dest, src) => {
 					match (dest, src) {
 						(Reg(rdest), Reg(rsrc)) | (Reg32(rdest), Reg32(rsrc)) => {
-							emit_maybe_rexw!(matches!(dest, Reg(_)), 0x0f, 0x40 | native_cond(cond), MOD_REG | native_reg(rdest) << 3 | native_reg(rsrc)); // cmovcc <rdest32>, <rsrc32>
+							emit_maybe_rexw!(matches!(dest, Reg(_)), 0x0f, 0x40 | native_cond(cond), MOD_REG | self.reg(rdest) << 3 | self.reg(rsrc)); // cmovcc <rdest32>, <rsrc32>
 						},
 						_ => todo!()
 					}
 				}
 				ZeroExtend(src) => {
 					match src {
-						Reg8(rsrc) => emit!(0x0f, 0xb6, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movzx <rsrc32>, <rsrc8>
-						Reg16(rsrc) => emit!(0x0f, 0xb7, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movzx <rsrc32>, <rsrc16>
-						Reg32(rsrc) => emit!(0x89, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // mov <rsrc32>, <rsrc32> ; This zero-extends to 64 bits
+						Reg8(rsrc) => emit!(0x0f, 0xb6, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)), // movzx <rsrc32>, <rsrc8>
+						Reg16(rsrc) => emit!(0x0f, 0xb7, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)), // movzx <rsrc32>, <rsrc16>
+						Reg32(rsrc) => emit!(0x89, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)), // mov <rsrc32>, <rsrc32> ; This zero-extends to 64 bits
 						_ => unreachable!(),
 					}
 				},
@@ -363,47 +341,47 @@ impl CodeGenerator for IntelX64Compiler {
 					// When extending to i32, should not sign-extend to upper 32 bits
 					// Not sure if matters but just to be on the safe side
 					match src {
-						Reg8(rsrc) => emit!(REX_W, 0x0f, 0xbe, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movsx <rsrc>, <rsrc8>
-						Reg16(rsrc) => emit!(REX_W, 0x0f, 0xbf, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movsx <rsrc>, <rsrc16>
-						Reg32(rsrc) => emit!(REX_W, 0x63, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)), // movsxd <rsrc>, <rsrc32>
+						Reg8(rsrc) => emit!(REX_W, 0x0f, 0xbe, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)), // movsx <rsrc>, <rsrc8>
+						Reg16(rsrc) => emit!(REX_W, 0x0f, 0xbf, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)), // movsx <rsrc>, <rsrc16>
+						Reg32(rsrc) => emit!(REX_W, 0x63, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)), // movsxd <rsrc>, <rsrc32>
 						_ => unreachable!(),
 					}
 				},
 				Add(dest, src) => {
 					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => emit!(0x01, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // add <dreg32>, <sreg32>
-						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x01, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // add <dreg32>, <sreg32>
+						(Reg32(rdest), Reg32(rsrc)) => emit!(0x01, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest)), // add <dreg32>, <sreg32>
+						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x01, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest)), // add <dreg32>, <sreg32>
 						_ => todo!()
 					}
 				},
 				Subtract(dest, src) => {
 					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => emit!(0x29, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // sub <dreg32>, <sreg32>
-						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x29, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // sub <dreg>, <sreg>
+						(Reg32(rdest), Reg32(rsrc)) => emit!(0x29, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest)), // sub <dreg32>, <sreg32>
+						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x29, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest)), // sub <dreg>, <sreg>
 						_ => todo!()
 					}
 				},
 				Multiply(dest, src) => {
 					match (dest, src) {
 						(Reg32(rdest), Reg32(rsrc)) => {
-							if native_reg(rdest) != AX {
-								if native_reg(rsrc) == AX {
-									emit!(0x90 | native_reg(rdest)); // xchg <rdest32>, <rsrc32>
+							if self.reg(rdest) != AX {
+								if self.reg(rsrc) == AX {
+									emit!(0x90 | self.reg(rdest)); // xchg <rdest32>, <rsrc32>
 								} else {
-									emit!(0x89, MOD_REG | native_reg(rdest) << 3 | AX); // mov eax, <rdest32>
+									emit!(0x89, MOD_REG | self.reg(rdest) << 3 | AX); // mov eax, <rdest32>
 								}
 							}
-							emit!(0xf7, MOD_REG | 0x5 << 3 | native_reg(rsrc)); // imul <rsrc32>
+							emit!(0xf7, MOD_REG | 0x5 << 3 | self.reg(rsrc)); // imul <rsrc32>
 						},
 						(Reg(rdest), Reg(rsrc)) => {
-							if native_reg(rdest) != AX {
-								if native_reg(rsrc) == AX {
-									emit!(REX_W, 0x90 | native_reg(rdest)); // xchg <rdest>, <rsrc>
+							if self.reg(rdest) != AX {
+								if self.reg(rsrc) == AX {
+									emit!(REX_W, 0x90 | self.reg(rdest)); // xchg <rdest>, <rsrc>
 								} else {
-									emit!(REX_W, 0x89, MOD_REG | native_reg(rdest) << 3 | AX); // mov rax, <rdest>
+									emit!(REX_W, 0x89, MOD_REG | self.reg(rdest) << 3 | AX); // mov rax, <rdest>
 								}
 							}
-							emit!(REX_W, 0xf7, MOD_REG | 0x5 << 3 | native_reg(rsrc)); // imul <rsrc>
+							emit!(REX_W, 0xf7, MOD_REG | 0x5 << 3 | self.reg(rsrc)); // imul <rsrc>
 						},
 						_ => todo!(),
 					}
@@ -412,7 +390,7 @@ impl CodeGenerator for IntelX64Compiler {
 					match (dest, src) {
 						(Reg32(rdest), Reg32(rsrc)) | (Reg(rdest), Reg(rsrc)) => {
 							let is64 = matches!(dest, Reg(_));
-							match (native_reg(rdest), native_reg(rsrc)) {
+							match (self.reg(rdest), self.reg(rsrc)) {
 								(AX, CX) => (),
 								(CX, AX) => emit_maybe_rexw!(is64, 0x90 | CX), // xchg {r|e}ax, {r|e}cx
 								(AX, DX) => emit_maybe_rexw!(is64, 0x89, MOD_REG | DX << 3 | CX), // mov {r|e}cx, {r|e}dx
@@ -448,7 +426,7 @@ impl CodeGenerator for IntelX64Compiler {
 				Compare(dest, src) => {
 					match (dest, src) {
 						(Reg32(rdest), Reg32(rsrc)) | (Reg(rdest), Reg(rsrc)) => {
-							emit_maybe_rexw!(matches!(dest, Reg(_)), 0x39, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)); // cmp <dreg{32|64}>, <sreg{32|64}>
+							emit_maybe_rexw!(matches!(dest, Reg(_)), 0x39, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest)); // cmp <dreg{32|64}>, <sreg{32|64}>
 						},
 						_ => unreachable!()
 					}
@@ -456,30 +434,30 @@ impl CodeGenerator for IntelX64Compiler {
 				SetIf(cond, dest) => {
 					match dest {
 						Reg(rdest) | Reg32(rdest) => {
-							emit!(0x0f, 0x90 | native_cond(cond), MOD_REG | native_reg(rdest)); // setcc <dreg8>
-							emit!(0x0f, 0xb6, MOD_REG | native_reg(rdest) << 3 | native_reg(rdest)); // movzx <dreg32>, <dreg8>
+							emit!(0x0f, 0x90 | native_cond(cond), MOD_REG | self.reg(rdest)); // setcc <dreg8>
+							emit!(0x0f, 0xb6, MOD_REG | self.reg(rdest) << 3 | self.reg(rdest)); // movzx <dreg32>, <dreg8>
 						},
 						_ => unreachable!()
 					}
 				}
 				And(dest, src) => {
 					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => emit!(0x21, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // and <dreg32>, <sreg32>
-						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x21, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // and <dreg>, <sreg>
+						(Reg32(rdest), Reg32(rsrc)) => emit!(0x21, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest)), // and <dreg32>, <sreg32>
+						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x21, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest)), // and <dreg>, <sreg>
 						_ => todo!()
 					}
 				},
 				Or(dest, src) => {
 					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => emit!(0x09, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // or <dreg32>, <sreg32>
-						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x09, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // or <dreg>, <sreg>
+						(Reg32(rdest), Reg32(rsrc)) => emit!(0x09, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest)), // or <dreg32>, <sreg32>
+						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x09, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest)), // or <dreg>, <sreg>
 						_ => todo!()
 					}
 				},
 				Xor(dest, src) => {
 					match (dest, src) {
-						(Reg32(rdest), Reg32(rsrc)) => emit!(0x31, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // xor <dreg32>, <sreg32>
-						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x31, MOD_REG | native_reg(rsrc) << 3 | native_reg(rdest)), // xor <dreg>, <sreg>
+						(Reg32(rdest), Reg32(rsrc)) => emit!(0x31, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest)), // xor <dreg32>, <sreg32>
+						(Reg(rdest), Reg(rsrc)) => emit!(REX_W, 0x31, MOD_REG | self.reg(rsrc) << 3 | self.reg(rdest)), // xor <dreg>, <sreg>
 						_ => todo!()
 					}
 				},
@@ -487,15 +465,15 @@ impl CodeGenerator for IntelX64Compiler {
 					let is64 = matches!(dest, Reg(_));
 					match (dest, cnt) {
 						(Reg32(rdest), Reg32(rcnt)) | (Reg(rdest), Reg(rcnt)) => {
-							let nr_dest = match (native_reg(rdest), native_reg(rcnt)) {
-								(_, CX) => native_reg(rdest),
+							let nr_dest = match (self.reg(rdest), self.reg(rcnt)) {
+								(_, CX) => self.reg(rdest),
 								(CX, _) => {
-									emit_maybe_rexw!(is64, 0x87, MOD_REG | native_reg(rdest) << 3 | CX); // xchg <rdest{32|64}>, {r|e}cx
-									native_reg(rcnt)
+									emit_maybe_rexw!(is64, 0x87, MOD_REG | self.reg(rdest) << 3 | CX); // xchg <rdest{32|64}>, {r|e}cx
+									self.reg(rcnt)
 								},
 								(_, _) => {
-									emit_maybe_rexw!(is64, 0x89, MOD_REG | native_reg(rcnt) << 3 | CX); // mov {r|e}cx, <rcnt{32|64}>
-									native_reg(rdest)
+									emit_maybe_rexw!(is64, 0x89, MOD_REG | self.reg(rcnt) << 3 | CX); // mov {r|e}cx, <rcnt{32|64}>
+									self.reg(rdest)
 								}
 							};
 
@@ -533,8 +511,8 @@ impl CodeGenerator for IntelX64Compiler {
 							//
 							// BEWARE: rip-relative addressing with hardcoded offset
 							emit!(REX_W, 0x8d, MOD_RM | DI << 3 | MOD_RIPREL, 0x08, 0x00, 0x00, 0x00); // lea rdi, [rip+8]
-							emit!(0xc1, MOD_REG | 0x4 << 3 | native_reg(rindex), 0x03); // shl <rindex32>, 3
-							emit!(REX_W, 0x01, MOD_REG | native_reg(rindex) << 3 | DI); // add rdi, <rindex32>
+							emit!(0xc1, MOD_REG | 0x4 << 3 | self.reg(rindex), 0x03); // shl <rindex32>, 3
+							emit!(REX_W, 0x01, MOD_REG | self.reg(rindex) << 3 | DI); // add rdi, <rindex32>
 							emit!(0xff, MOD_RM | 0x4 << 3 | DI); // jmp [rdi]
 
 							for target in targets {
@@ -555,7 +533,7 @@ impl CodeGenerator for IntelX64Compiler {
 							match op {
 								Reg32(op_reg) => {
 									let offset = offset_map.vm_data() + codegen::VM_DATA_TMP_0 * 8;
-									emit!(REX_W | REX_B, 0x89, MOD_DISP32 | native_reg(op_reg) << 3 | R15); // mov [r15+<offset>], <rsrc>
+									emit!(REX_W | REX_B, 0x89, MOD_DISP32 | self.reg(op_reg) << 3 | R15); // mov [r15+<offset>], <rsrc>
 									code.emit_imm32_le(offset);
 									(None, signature)
 								},
@@ -569,7 +547,7 @@ impl CodeGenerator for IntelX64Compiler {
 					if n_params > 0 {
 						let mut sp_off = 8 * (n_params as i32 - 1);
 						for i in 0..std::cmp::min(n_params as usize, ABI_PARAM_REGS.len()) {
-							emit_with_offset!(REX_W | ABI_PARAM_REGS[i].0, 0x8b ; ABI_PARAM_REGS[i].1 << 3 | SP, SIB1 | SP << 3 | SP, sp_off); // mov reg, [rsp + sp_off]
+							emit_with_offset!(REX_W | ABI_PARAM_REGS[i].0, 0x8b ; ABI_PARAM_REGS[i].1 << 3 | SP, SIB1 | SP << 3 | SP ; sp_off); // mov reg, [rsp + sp_off]
 							sp_off -= 8;
 						}
 						if n_stack_params > 0 {
@@ -581,8 +559,8 @@ impl CodeGenerator for IntelX64Compiler {
 							// store the current rsp and rbp values into the space freed up after
 							// populating registers with arguments to be able to get rid of the whole frame
 							// when the call is returned.
-							emit_with_offset!(REX_W, 0x89 ; SP << 3 | AX, n_stack_params as i32 * 8); // mov [rax + stored_sp_off], rsp
-							emit_with_offset!(REX_W, 0x89 ; BP << 3 | AX, (n_stack_params + 1) as i32 * 8); // mov [rax + stored_bp_off], rbp
+							emit_with_offset!(REX_W, 0x89 ; SP << 3 | AX ; n_stack_params as i32 * 8); // mov [rax + stored_sp_off], rsp
+							emit_with_offset!(REX_W, 0x89 ; BP << 3 | AX ; (n_stack_params + 1) as i32 * 8); // mov [rax + stored_bp_off], rbp
 							emit!(REX_W, 0x89, MOD_REG | AX << 3 | BP); // mov rbp, rax
 							emit!(REX_W | REX_B, 0x89, MOD_REG | BP << 3 | R11); // mov r11, rbp
 							let frame_off = (n_stack_params as i32 - 1) * 8;
@@ -648,8 +626,8 @@ impl CodeGenerator for IntelX64Compiler {
 						if n_stack_params > 0 {
 							// rsp points to the bottom of the ABI frame. Offsets to the stored
 							// rsp and rbp values are known
-							emit_with_offset!(REX_W, 0x8b ; BP << 3 | SP, SIB1 | SP << 3 | SP, (n_stack_params + 1) as i32 * 8); // mov rbp, [rsp + storeb_bp_off]
-							emit_with_offset!(REX_W, 0x8b ; SP << 3 | SP, SIB1 | SP << 3 | SP, n_stack_params as i32 * 8); // mov rsp, [rsp + storeb_sp_off]
+							emit_with_offset!(REX_W, 0x8b ; BP << 3 | SP, SIB1 | SP << 3 | SP ; (n_stack_params + 1) as i32 * 8); // mov rbp, [rsp + storeb_bp_off]
+							emit_with_offset!(REX_W, 0x8b ; SP << 3 | SP, SIB1 | SP << 3 | SP ; n_stack_params as i32 * 8); // mov rsp, [rsp + storeb_sp_off]
 						} else {
 							emit!(REX_W | REX_R, 0x89, MOD_REG | R12 << 3 | SP); // mov rsp, r12
 						}
@@ -671,10 +649,10 @@ impl CodeGenerator for IntelX64Compiler {
 				LeadingZeroes(src) => {
 					match src {
 						Reg32(rsrc) => {
-							emit!(REP, 0x0f, 0xbd, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // lzcnt <rsrc32>, <rsrc32> ;; (encoded as rep bsr)
+							emit!(REP, 0x0f, 0xbd, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)); // lzcnt <rsrc32>, <rsrc32> ;; (encoded as rep bsr)
 						},
 						Reg(rsrc) => {
-							emit!(REP, REX_W, 0x0f, 0xbd, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // lzcnt <rsrc>, <rsrc>
+							emit!(REP, REX_W, 0x0f, 0xbd, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)); // lzcnt <rsrc>, <rsrc>
 						},
 						_ => unreachable!()
 					}
@@ -682,10 +660,10 @@ impl CodeGenerator for IntelX64Compiler {
 				TrailingZeroes(src) => {
 					match src {
 						Reg32(rsrc) => {
-							emit!(REP, 0x0f, 0xbc, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // tzcnt <rsrc32>, <rsrc32> ;; (encoded as rep bsf)
+							emit!(REP, 0x0f, 0xbc, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)); // tzcnt <rsrc32>, <rsrc32> ;; (encoded as rep bsf)
 						},
 						Reg(rsrc) => {
-							emit!(REP, REX_W, 0x0f, 0xbc, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // tzcnt <rsrc>, <rsrc>
+							emit!(REP, REX_W, 0x0f, 0xbc, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)); // tzcnt <rsrc>, <rsrc>
 						},
 						_ => unreachable!()
 					}
@@ -693,10 +671,10 @@ impl CodeGenerator for IntelX64Compiler {
 				BitPopulationCount(src) => {
 					match src {
 						Reg32(rsrc) => {
-							emit!(REP, 0x0f, 0xb8, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // popcnt <rsrc32>, <rsrc32>
+							emit!(REP, 0x0f, 0xb8, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)); // popcnt <rsrc32>, <rsrc32>
 						},
 						Reg(rsrc) => {
-							emit!(REP, REX_W, 0x0f, 0xb8, MOD_REG | native_reg(rsrc) << 3 | native_reg(rsrc)); // popcnt <rsrc32>, <rsrc32>
+							emit!(REP, REX_W, 0x0f, 0xb8, MOD_REG | self.reg(rsrc) << 3 | self.reg(rsrc)); // popcnt <rsrc32>, <rsrc32>
 						},
 						_ => unreachable!(),
 					}
@@ -704,7 +682,7 @@ impl CodeGenerator for IntelX64Compiler {
 				InitTablePreamble(offset) => {
 					match offset {
 						Reg(offset_reg) => {
-							emit!(REX_W | REX_B, 0x8d, MOD_DISP32 | DI << 3 | MOD_SIB, SIB8 | native_reg(offset_reg) << 3 | R15); // lea rdi, [r15+<roffset>*8+<offset>]
+							emit!(REX_W | REX_B, 0x8d, MOD_DISP32 | DI << 3 | MOD_SIB, SIB8 | self.reg(offset_reg) << 3 | R15); // lea rdi, [r15+<roffset>*8+<offset>]
 							code.emit_imm32_le(offset_map.table(0)); // FIXME
 							emit!(0xfc); // cld
 						},
@@ -727,7 +705,7 @@ impl CodeGenerator for IntelX64Compiler {
 				InitMemoryFromChunk(chunk_idx, chunk_len, offset) => {
 					match offset {
 						Reg(offset_reg) => {
-							emit!(REX_W | REX_B, 0x8d, MOD_RM | DI << 3 | MOD_SIB, SIB1 | native_reg(offset_reg) << 3 | R15); // lea rdi, [r15+<roffset>*1]
+							emit!(REX_W | REX_B, 0x8d, MOD_RM | DI << 3 | MOD_SIB, SIB1 | self.reg(offset_reg) << 3 | R15); // lea rdi, [r15+<roffset>*1]
 						},
 						_ => todo!()
 					}
@@ -744,7 +722,7 @@ impl CodeGenerator for IntelX64Compiler {
 							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | SI << 3 | R15); // mov rsi, [r15+<offset>]
 							code.emit_imm32_le(offset_map.vm_data() + codegen::VM_DATA_MEM_ALLOC);
 							emit!(REX_W, 0x89, MOD_REG | SI << 3 | DI); // mov rdi, rsi
-							emit!(REX_W, 0x01, MOD_REG | native_reg(rpages) << 3 | SI); // add rsi, <rpages>
+							emit!(REX_W, 0x01, MOD_REG | self.reg(rpages) << 3 | SI); // add rsi, <rpages>
 							emit!(REX_W | REX_B, 0x3b, MOD_DISP32 | SI << 3 | R15); // cmp rsi, [r15+<offset>]
 							code.emit_imm32_le(offset_map.vm_data() + codegen::VM_DATA_MEM_TOTAL);
 							emit!(0x77, 0x09); // ja fail
@@ -754,7 +732,7 @@ impl CodeGenerator for IntelX64Compiler {
 							// fail:
 							emit!(0xb8 | DI, 0xff, 0xff, 0xff, 0xff); // mov edi, -1
 							// end:
-							emit!(0x89, MOD_REG | DI << 3 | native_reg(rpages)); // mov <rpages32>, edi
+							emit!(0x89, MOD_REG | DI << 3 | self.reg(rpages)); // mov <rpages32>, edi
 						},
 						_ => unreachable!()
 					}
@@ -762,7 +740,7 @@ impl CodeGenerator for IntelX64Compiler {
 				MemorySize(dest) => {
 					match dest {
 						Reg32(rdest) => {
-							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | native_reg(rdest) << 3 | R15); // mov <rdest>, [r15+<offset>]
+							emit!(REX_W | REX_B, 0x8b, MOD_DISP32 | self.reg(rdest) << 3 | R15); // mov <rdest>, [r15+<offset>]
 							code.emit_imm32_le(offset_map.vm_data() + codegen::VM_DATA_MEM_ALLOC);
 						},
 						_ => unreachable!()

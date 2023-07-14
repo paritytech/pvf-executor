@@ -6,7 +6,8 @@ fn wat(code: &str) -> Vec<u8> {
 
 fn test<P: WasmParams, R: WasmResultType>(code: Vec<u8>, params: P) -> R {
 	let raw: RawPvf = RawPvf::from_bytes(&code);
-	let ir = raw.translate().unwrap();
+	let mut ir = raw.translate().unwrap();
+	ir.optimize();
 	let mut codegen = IntelX64Compiler::new();
 	let pvf = ir.compile(&mut codegen);
 	let instance = PvfInstance::instantiate(&pvf);
@@ -34,7 +35,8 @@ fn test_with_imports<P: WasmParams, R: WasmResultType>(code: Vec<u8>, params: P)
 			Err(PvfError::UnresolvedImport(name.to_owned()))
 		}
 	});
-	let ir = raw.translate().unwrap();
+	let mut ir = raw.translate().unwrap();
+	ir.optimize();
 	let mut codegen = IntelX64Compiler::new();
 	let pvf = ir.compile(&mut codegen);
 	let instance = PvfInstance::instantiate(&pvf);
